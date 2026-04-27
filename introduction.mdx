@@ -1,0 +1,82 @@
+---
+title: 'klikit Partner API'
+description: 'Receive orders, sync menus, and manage availability across every delivery provider — through one documented contract.'
+---
+
+klikit aggregates restaurant orders across every major delivery platform and first-party channel. The Partner API gives external systems — POS, ERP, inventory tools, white-label storefronts — one contract to receive orders, drive status, sync availability, and push catalogue data. Status: v1.0, accepting design partners.
+
+## What klikit does
+
+- **Receive every order in real time**, regardless of which platform or channel it originated from.
+- **Drive order status** — accept, reject, mark ready, mark picked up, cancel — and klikit propagates the transition to the upstream provider.
+- **Sync availability** — push out-of-stock, snooze, or restock — and the change propagates to every connected aggregator.
+- **Map your catalogue** to klikit's so your own SKUs appear on incoming orders and power stock signals.
+- **Push your master menu** into klikit (for partners who own the catalogue).
+
+One credential pair, one webhook subscription, one canonical schema.
+
+## Supported delivery platforms
+
+GrabFood, Uber Eats, Foodpanda, GoFood, ShopeeFood, Wolt, Deliveroo, Demaecan, Pickaroo, TikTok Shop, Maxim, plus klikit's direct webshop, dine-in, and scan-to-order channels. More are added regularly.
+
+Every order arrives in a single canonical schema regardless of origin — provider attribution is always explicit on the `provider` field.
+
+## Partner types
+
+| You are a... | You'll use |
+|---|---|
+| **POS** | Order webhooks + status callbacks + Menu Mapping + Stock Sync |
+| **ERP / accounting** | Order webhooks (`order.delivered`) + read-only order queries |
+| **Inventory system** | Menu Mapping + Stock Sync only |
+| **White-label storefront** | Menu Push + Order webhooks |
+
+<Note>
+  Capabilities are gated by OAuth2 scopes — your credential is issued with only the scopes your integration needs.
+</Note>
+
+## Capability matrix
+
+| Capability | Direction | Scope | Description |
+|---|---|---|---|
+| Order webhooks (`order.placed`, `order.updated`, `order.cancelled`, `order.amended`) | klikit → partner | Subscribed event | Real-time push of every order event to your registered webhook URL |
+| Order status callback (accept, reject, ready, picked-up, cancel) | partner → klikit | `orders:write` | Advance an order through its lifecycle; klikit notifies the upstream provider |
+| Order read (single + list) | partner → klikit | `orders:read` | Pull-based alternative to webhooks; supports filtering and cursor pagination |
+| Cancel reasons enum | partner → klikit | `orders:read` | Canonical list of cancel reasons for status callbacks |
+| Menu Mapping (lookup + upsert items, categories, modifier groups) | partner → klikit | `mapping:write` | Register your SKUs against klikit item IDs so orders carry `partner_item_id` and stock calls work with your own identifiers |
+| Stock Sync (single + bulk) | partner → klikit | `stock:write` | Push out-of-stock, snooze, or restock signals; klikit propagates to every aggregator |
+| Menu Push (full tree, async) | partner → klikit | `menus:write` | Submit your master catalogue; klikit handles all aggregator transformations |
+| Menu Read (canonical klikit menu) | partner → klikit | `menus:read` | Inspect klikit's canonical menu structure to build mappings against |
+
+## Quick start
+
+1. **Request credentials.** klikit issues a `client_id` + `client_secret` per partner per business.
+2. **Exchange for a token.** `POST /v1/partner/oauth/token` with grant `client_credentials` returns a short-lived `access_token`.
+3. **Register your webhook URL.** Provide an HTTPS endpoint that klikit will POST events to, plus your HMAC verification secret.
+4. **Receive a test order.** klikit fires an `order.placed` test event from a sandbox business; you confirm HMAC verification and a `2xx` response.
+5. **Push menu mapping.** `POST /v1/partner/menus/items/mappings` with your SKUs against klikit item IDs (use `GET /v1/partner/menus` to discover them). Once mapped, stock calls work using your own SKUs.
+
+Detailed onboarding sequence in [Authentication](/authentication).
+
+## Out of scope (v1)
+
+| Capability | Reason |
+|---|---|
+| Live modification of in-flight aggregator orders | Aggregator platforms do not support API-driven in-flight edits. Use cancel + re-create. |
+| Payment processing / refunds | Separate contract — contact your klikit account manager. |
+| Customer PII bulk export | Privacy / compliance — PII is surfaced only on a per-order basis. |
+| Multi-business partner credentials (one token across multiple businesses) | Tracked for a future release. For v1, request one credential pair per business. |
+| Inbound order creation from partner (POS-originated dine-in into klikit's order management) | Out of scope for v1. |
+
+## Next steps
+
+<CardGroup cols={3}>
+  <Card title="Authentication" icon="lock" href="/authentication">
+    OAuth2 client credentials, HMAC webhook signing, scopes, and key rotation.
+  </Card>
+  <Card title="Orders" icon="bag-shopping" href="/orders">
+    Order schema, lifecycle, outbound webhooks, and the status callback API.
+  </Card>
+  <Card title="Menus" icon="utensils" href="/menus">
+    Menu Mapping, Stock Sync, Menu Push, and reading the klikit catalogue.
+  </Card>
+</CardGroup>

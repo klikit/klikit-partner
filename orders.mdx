@@ -3,11 +3,7 @@ title: 'Orders'
 description: 'Outbound order webhooks, partner-side status callbacks, and the canonical order schema.'
 ---
 
-# Orders
-
 Outbound order webhooks (klikit → partner), the partner-side status callback API, the canonical order schema, lifecycle, and per-provider considerations.
-
----
 
 ## TL;DR
 
@@ -50,6 +46,10 @@ klikit's canonical states:
    ↑ terminal (pickup / dine-in / scan-to-order)
 ```
 
+<Note>
+  Delivery completion (`delivered`) is **rider-driven**, not partner-driven. For delivery orders, do not call the status callback with `picked_up` — klikit will mark the order `delivered` when the rider/aggregator confirms handoff. Partners only set `picked_up` for pickup, dine-in, and scan-to-order flows.
+</Note>
+
 ### Status enum (partner-facing)
 
 The contract uses **string aliases**, not the internal int IDs. The integers are surfaced as `status_code` if you prefer them.
@@ -62,6 +62,10 @@ The contract uses **string aliases**, not the internal int IDs. The integers are
 | `ready` | 4 | Food prepared, ready for pickup/handoff | No |
 | `delivered` | 5 | Order completed (delivery flow) — terminal | **Yes** |
 | `picked_up` | 9 | Order completed (pickup / dine-in / STO flow) — terminal | **Yes** |
+
+<Note>
+  Use the string alias in every contract surface (request bodies, query filters, webhook payloads). `status_code` is provided alongside `status` purely as a convenience for partners that prefer integer state machines — both fields always agree.
+</Note>
 
 ### Valid partner-driven transitions
 
@@ -78,7 +82,7 @@ klikit will reject invalid transitions with `409 Conflict` and an `error.code` o
 
 ## 2. Outbound Webhooks
 
-Subscribed events are delivered to your registered `webhook_url` (see [Authentication §9](./authentication.md#9-onboarding-sequence)). Every event is HMAC-signed.
+Subscribed events are delivered to your registered `webhook_url` (see [Authentication §9](/authentication#9-onboarding-sequence)). Every event is HMAC-signed.
 
 ### Event envelope
 
@@ -100,6 +104,10 @@ Subscribed events are delivered to your registered `webhook_url` (see [Authentic
 | `event_version` | Schema version. Major bumps will fire alongside old version during deprecation window. |
 | `created_at` | When klikit emitted the event (not when the order was placed). |
 | `business_id` | The klikit business this event belongs to — useful when one partner serves multiple businesses. |
+
+<Tip>
+  Webhooks are delivered at-least-once. Always dedupe by `event_id` on your side — the same `event_id` arriving twice should be a no-op. klikit considers an event delivered after the first `2xx` response.
+</Tip>
 
 ### Event types
 
@@ -232,7 +240,7 @@ The canonical order, used in `data` of `order.placed` / `order.updated` / `order
 ### Field notes
 
 - **`provider.id`** — see provider table in §6. Always present, including for klikit's direct webshop channel.
-- **`partner_item_id` / `partner_modifier_id`** — populated only if you have registered mappings via [`mapping:write`](./menus.md#1-menu-mapping). `null` otherwise.
+- **`partner_item_id` / `partner_modifier_id`** — populated only if you have registered mappings via [`mapping:write`](/menus#1-menu-mapping). `null` otherwise.
 - **`status_history`** — at-least the `placed` entry; klikit appends each transition. `by` is one of `system`, `partner`, `aggregator`, `customer`, `operator`.
 - **`metadata.provider_metadata`** — escape hatch for provider-specific fields klikit doesn't model canonically. Safe to ignore; advanced integrations can use it.
 - **PII** is exposed raw in v1 (customer name, phone, address). Tokenized references behind a `pii:read` scope are on the roadmap.
@@ -273,13 +281,13 @@ Content-Type: application/json
   "status_code": 2,
   "updated_at": "2026-04-27T10:14:31Z",
   "provider_propagation": {
-    "state": "queued",                      // queued | propagated | failed | not_required
+    "state": "queued",
     "attempted_at": null
   }
 }
 ```
 
-`provider_propagation` is best-effort feedback on whether klikit has notified the upstream provider. `not_required` means the order is on a channel that doesn't need provider notification (e.g. klikit's direct webshop channel).
+`provider_propagation` is best-effort feedback on whether klikit has notified the upstream provider. State is one of `queued`, `propagated`, `failed`, or `not_required`. `not_required` means the order is on a channel that doesn't need provider notification (e.g. klikit's direct webshop channel).
 
 ### Errors
 
@@ -292,6 +300,10 @@ Content-Type: application/json
 | 409 | `invalid_status_transition` | E.g. `accepted → placed` |
 | 409 | `provider_rejected_cancel` | Aggregator refuses cancel (rider already assigned) |
 | 422 | `missing_cancel_reason` | `cancelled` without `reason_code` |
+
+<Warning>
+  `409 provider_rejected_cancel` cannot be retried client-side — the aggregator has refused the cancellation (typically because a rider is already en route). Operators must escalate to klikit support to coordinate the cancel directly with the provider.
+</Warning>
 
 ### 4.1 Cancel reasons
 
@@ -337,6 +349,10 @@ GET /v1/partner/orders?status=delivered&placed_from=2026-04-27T00:00:00Z&placed_
 | `limit` | Default 50, max 200 |
 
 Response is a paginated list of order objects. Use the `X-Klikit-Next-Cursor` header for pagination.
+
+<Tip>
+  Cursors are **opaque** — do not parse, decode, or persist them across deploys. Treat each cursor as a single-use token: read it from `X-Klikit-Next-Cursor`, pass it back as the `cursor` query param on the next request, and discard.
+</Tip>
 
 ```http
 GET /v1/partner/orders/{order_id}
@@ -386,14 +402,18 @@ These are the differences that bleed through despite the canonical schema.
 | **Scheduled orders** | `scheduled_for` is set; do not begin preparation until `(scheduled_for - lead_time)`. Lead time is configurable on your side. |
 | **Replays** | Webhooks can fire more than once. Always dedupe by `event_id`. The order itself is idempotent — `order.placed` for the same `id` twice should be a no-op. |
 
+<Warning>
+  **Live modification of in-flight orders is not supported** by any aggregator. Once an order is `accepted`, you cannot change items, quantities, or modifiers via the API. The only workaround is to `cancel` the existing order (with an appropriate `reason_code`) and have the customer re-place on a different channel.
+</Warning>
+
 ---
 
 ## 8. Failure Modes
 
 | Scenario | Behaviour |
 |---|---|
-| Your endpoint returns 5xx | klikit retries per [Authentication §5](./authentication.md#5-webhook-retry-policy) |
-| Your endpoint timeout (>10s) | Counted as failure; retried |
+| Your endpoint returns 5xx | klikit retries per [Authentication §5](/authentication#5-webhook-retry-policy) |
+| Your endpoint timeout (`>10s`) | Counted as failure; retried |
 | Your endpoint returns 4xx | klikit retries (4xx may be transient); after final attempt → dead-letter |
 | Duplicate `event_id` delivered | Dedupe on your side; klikit considers it delivered after first 2xx |
 | Status callback fails to propagate to provider | `provider_propagation.state: "failed"` in response. The klikit-side state still transitions; klikit retries provider notification asynchronously. |
@@ -403,6 +423,6 @@ These are the differences that bleed through despite the canonical schema.
 
 ## See Also
 
-- [Authentication](./authentication.md) — how to get a token, how to verify webhooks
-- [Menus](./menus.md) — Menu Mapping (so `partner_item_id` populates on orders)
+- [Authentication](/authentication) — how to get a token, how to verify webhooks
+- [Menus](/menus) — Menu Mapping (so `partner_item_id` populates on orders)
 - [OpenAPI Spec](./openapi/orders.yaml) — machine-readable spec

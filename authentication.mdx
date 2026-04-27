@@ -1,0 +1,256 @@
+---
+title: "Authentication"
+description: "OAuth2 client credentials, HMAC webhook signing, idempotency, rate limits, and key rotation."
+---
+
+All requests to the klikit Partner API are authenticated with short-lived Bearer tokens issued via the OAuth2 `client_credentials` grant. Incoming webhooks from klikit are signed with HMAC-SHA256 so you can verify their authenticity before trusting the payload. This page covers the full authentication contract: how to obtain and use tokens, how to verify webhook signatures, available scopes, idempotency, rate limits, and how to rotate secrets safely.
+
+## Credentials
+
+A klikit partner is uniquely identified by a `(partner_id, business_id)` pair. One legal partner integrating with multiple businesses receives multiple credential pairs — one per business.
+
+Each credential pair contains:
+
+| Field            | Purpose                                                             |
+| ---------------- | ------------------------------------------------------------------- |
+| `client_id`      | Public identifier. Sent in every token request.                     |
+| `client_secret`  | Confidential. Used in token requests. Rotatable.                    |
+| `webhook_url`    | Your HTTPS endpoint where klikit POSTs events.                      |
+| `webhook_secret` | HMAC verification secret. Rotatable. Distinct from `client_secret`. |
+| `scopes`         | The subset of capability scopes granted to this credential.         |
+| `business_id`    | The single klikit business this credential is scoped to.            |
+
+<Note>
+  Credentials are per `(partner_id, business_id)` pair. If you integrate with multiple businesses, request a separate credential set for each one.
+</Note>
+
+Credentials are issued by the klikit Partner Operations team during onboarding.
+
+## Obtaining a token
+
+### Token request
+
+```http token request theme={null}
+POST /v1/partner/oauth/token HTTP/1.1
+Host: TBD — production host
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+&client_id=<client_id>
+&client_secret=<client_secret>
+&scope=orders:read orders:write menus:read mapping:write stock:write
+```
+
+<ParamField type="string">
+  Must be `client_credentials`.
+</ParamField>
+
+<ParamField type="string">
+  The public identifier issued by klikit Partner Operations.
+</ParamField>
+
+<ParamField type="string">
+  The confidential secret issued by klikit Partner Operations.
+</ParamField>
+
+<ParamField type="string">
+  Space-separated list of scopes to request. Must be a subset of the scopes granted to your credential. Omit to request all granted scopes.
+</ParamField>
+
+### Token response
+
+```json token response theme={null}
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "orders:read orders:write menus:read mapping:write stock:write"
+}
+```
+
+### Using the token
+
+Attach the token to every API request using the `Authorization` header:
+
+```http authorized request theme={null}
+GET /v1/partner/orders/ord_01HX7K4J4M9V2P0Q5T8Z3W6Y1B HTTP/1.1
+Host: TBD — production host
+Authorization: Bearer <access_token>
+```
+
+### Refresh strategy
+
+There is no refresh token in the `client_credentials` grant. Re-request a new token before the current one expires.
+
+**Recommended:** schedule a background refresh at `expires_in - 300` seconds (5 minutes before expiry). This ensures your system never sends a request with a stale token, while avoiding unnecessary token churn.
+
+### Token endpoint errors
+
+| HTTP status | `error` value         | Cause                                                  |
+| ----------- | --------------------- | ------------------------------------------------------ |
+| 400         | `invalid_request`     | Missing `grant_type`, `client_id`, or `client_secret`  |
+| 401         | `invalid_client`      | Incorrect `client_id` or `client_secret`               |
+| 400         | `invalid_scope`       | Requested scope not granted to this credential         |
+| 429         | `rate_limit_exceeded` | More than 60 token requests per minute per `client_id` |
+
+## Scopes
+
+Scopes follow least-privilege: your credential is issued with only the subset your integration needs.
+
+| Scope           | Endpoints granted                                                                                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `orders:read`   | `GET /v1/partner/orders` · `GET /v1/partner/orders/{id}` · `GET /v1/partner/orders/cancel-reasons`                                                                                    |
+| `orders:write`  | `PATCH /v1/partner/orders/{id}/status` (accept, reject, ready, picked-up, cancel)                                                                                                     |
+| `menus:read`    | `GET /v1/partner/menus` · `GET /v1/partner/menus/items` · `GET /v1/partner/menus/jobs/{id}`                                                                                           |
+| `menus:write`   | `POST /v1/partner/menus` (Menu Push) · `POST /v1/partner/menus/publish`                                                                                                               |
+| `mapping:write` | `POST /v1/partner/menus/items/mappings` · `POST /v1/partner/menus/categories/mappings` · `POST /v1/partner/menus/modifier-groups/mappings` · `POST /v1/partner/menus/mappings/lookup` |
+| `stock:write`   | `PATCH /v1/partner/menus/stock/{partner_item_id}` · `PATCH /v1/partner/menus/stock/bulk`                                                                                              |
+
+Webhook subscriptions are configured per credential at issuance and are **not** scope-gated. klikit only delivers events you have explicitly subscribed to.
+
+## Webhook signing (HMAC)
+
+Every outbound webhook from klikit is signed with HMAC-SHA256. Always verify the signature before trusting the payload.
+
+### Headers on every webhook
+
+| Header                | Purpose                                                                        |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `X-Klikit-Signature`  | HMAC signature in the format `t=<unix_ts>,v1=<hex hmac-sha256>`                |
+| `X-Klikit-Event`      | Event type, e.g. `order.placed`                                                |
+| `X-Klikit-Event-Id`   | Stable UUID — use this for idempotent processing and deduplication             |
+| `X-Klikit-Webhook-Id` | The klikit webhook subscription ID — useful if you have multiple subscriptions |
+| `Content-Type`        | Always `application/json`                                                      |
+
+### Verification steps
+
+The signed payload is the concatenation `<unix_ts>.<raw_request_body>`. Compute HMAC-SHA256 over that string using your `webhook_secret` and compare it to the `v1` value from the `X-Klikit-Signature` header.
+
+```python verify_signature.py theme={null}
+import hmac, hashlib, time
+
+def verify(headers, raw_body, secret):
+    sig_header = headers["X-Klikit-Signature"]
+    parts = dict(p.split("=") for p in sig_header.split(","))
+    ts = parts["t"]
+    received = parts["v1"]
+
+    # Reject events with a timestamp older than 5 minutes
+    if abs(time.time() - int(ts)) > 300:
+        return False
+
+    expected = hmac.new(
+        secret.encode(),
+        f"{ts}.{raw_body}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    # Use compare_digest to prevent timing attacks
+    return hmac.compare_digest(expected, received)
+```
+
+<Warning>
+  Always use a constant-time comparison (such as `hmac.compare_digest`) when checking the signature. A standard equality check is vulnerable to timing attacks.
+</Warning>
+
+### Replay protection
+
+* The timestamp `t` is part of the signed payload, so a replayed request with a different timestamp will fail verification.
+* You **must** reject any event whose `t` is more than 5 minutes in the past.
+* You **must** deduplicate by `X-Klikit-Event-Id`. Webhooks are delivered at-least-once; the same event may arrive more than once (for example, after a retry).
+
+<Warning>
+  Rejecting stale timestamps is mandatory. Without it, an attacker who captures a single signed request can replay it indefinitely.
+</Warning>
+
+## Webhook retry policy
+
+| Aspect            | Behaviour                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Acceptance window | Your endpoint must return `2xx` within **10 seconds**. Any other response (including timeout) is treated as a failure and triggers a retry. |
+| Retry schedule    | Exponential backoff: 30 s → 2 min → 10 min → 1 h → 6 h → 24 h. Six attempts in total.                                                       |
+| Dead-letter       | After the final attempt fails, the event is moved to a dead-letter queue and you are notified by email.                                     |
+| Manual replay     | You can request a replay of dead-lettered events through klikit support.                                                                    |
+| Ordering          | **Not guaranteed.** Do not rely on event arrival order. Use `created_at` and `event_id` to reconstruct order.                               |
+
+## Idempotency
+
+All non-idempotent writes (`POST`, `PATCH`) should include an `Idempotency-Key` header:
+
+```http idempotent write theme={null}
+POST /v1/partner/menus/items/mappings HTTP/1.1
+Host: TBD — production host
+Authorization: Bearer <access_token>
+Idempotency-Key: <UUID v4 chosen by you>
+Content-Type: application/json
+```
+
+klikit caches the response for 24 hours. A retry using the same key returns the cached response without re-executing the action. Sending the same key with a **different** request body returns `409 Conflict`.
+
+## Rate limits
+
+Per credential, per endpoint class:
+
+| Endpoint class                  | Limit       |
+| ------------------------------- | ----------- |
+| Token issuance (`/oauth/token`) | 60 req/min  |
+| Reads (`GET`)                   | 600 req/min |
+| Writes (`POST`, `PATCH`)        | 300 req/min |
+| Bulk writes (`/bulk` suffix)    | 60 req/min  |
+
+When exceeded, the API returns `429 Too Many Requests` with:
+
+```http 429 response headers theme={null}
+HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+X-RateLimit-Limit: 600
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1745747663
+```
+
+Honour the `Retry-After` value before retrying.
+
+## Key rotation
+
+Both `client_secret` and `webhook_secret` can be rotated independently.
+
+To request a rotation, contact klikit support (a self-service partner dashboard is on the roadmap).
+
+During rotation:
+
+* Both the old and new secrets are valid for a **24-hour overlap window**, giving your systems time to roll over without downtime.
+* For webhook signature verification, klikit accepts a signature computed with either the old or new `webhook_secret` during the overlap window.
+* After 24 hours, the old secret is revoked.
+
+<Note>
+  Plan your rotation so that all instances of your service have picked up the new secret before the 24-hour window closes.
+</Note>
+
+## Onboarding sequence
+
+<Steps>
+  <Step title="Sign partner agreement">
+    Sign the partner agreement with klikit Partner Operations.
+  </Step>
+  <Step title="Receive credentials">
+    klikit issues credentials for your business: `client_id`, `client_secret`, and `webhook_secret`.
+  </Step>
+  <Step title="Register your webhook URL">
+    Provide your HTTPS webhook endpoint to klikit Partner Operations.
+  </Step>
+  <Step title="Subscribe to events">
+    Choose the event types you want to receive (e.g. `order.placed`, `order.cancelled`).
+  </Step>
+  <Step title="Smoke-test the token exchange">
+    Exchange `client_credentials` for a token to confirm your credentials work end-to-end.
+  </Step>
+  <Step title="Verify a sandbox webhook">
+    klikit fires a sandbox order; confirm your endpoint verifies the HMAC signature and responds `200 OK`.
+  </Step>
+  <Step title="Push initial menu data">
+    Push your initial menu mapping (POS integrations) or full menu (white-label integrations).
+  </Step>
+  <Step title="Live cutover">
+    Your business is enabled for the production order flow.
+  </Step>
+</Steps>

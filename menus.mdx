@@ -59,6 +59,10 @@ Authorization: Bearer <token>
 
 Returns the full canonical menu tree for that store. Use this to build a local cache, then fuzzy-match your SKUs to klikit IDs (or — preferably — let your admin pick from a dropdown).
 
+<Tip>
+  Fuzzy-matching SKUs by name is fragile (typos, locale variants, seasonal renames). The most reliable mapping UX is a one-time admin task: render the klikit tree alongside your own catalogue and let a human pick. You only have to do it once per item.
+</Tip>
+
 ### 1.2 Bulk lookup by partner ID
 
 ```http
@@ -132,6 +136,10 @@ Same shape, different paths:
 - Removing a mapping: `DELETE /v1/partner/menus/items/mappings` body `{ "klikit_ids": [12345] }`.
 - When a klikit item is deleted, mappings against it are auto-cleaned and a `mapping.invalidated` webhook fires (subscription `mapping.invalidated`).
 
+<Note>
+  Mappings are scoped to the credential that registered them. If your organisation holds multiple credential pairs (one per business), each must register its own mappings — they are not shared across credentials, even within the same legal partner.
+</Note>
+
 ---
 
 ## 2. Stock Sync
@@ -163,6 +171,10 @@ Content-Type: application/json
 | `snooze_duration_seconds` | Soft OOS for N seconds, then auto-restore. Mutually exclusive with `snooze_until_turn_back: true`. |
 | `snooze_until_turn_back` | Soft OOS until you re-enable. Equivalent to indefinite snooze. |
 
+<Note>
+  klikit auto-marks an item OOS when `stock_quantity` reaches `0`, regardless of the `is_enabled` value. You do not need to send a separate disable call when a counter drains.
+</Note>
+
 **Use the right knob:**
 
 | Intent | Set |
@@ -172,6 +184,10 @@ Content-Type: application/json
 | Sold out *right now*, kitchen will toggle back manually when restocked | `is_enabled: false` |
 | Restock complete | `is_enabled: true`, omit snooze fields |
 | 47 left in stock today | `stock_quantity: 47, is_enabled: true` (klikit auto-marks OOS at 0) |
+
+<Tip>
+  Always send an `Idempotency-Key` on stock writes. Kitchen tablets retry aggressively on flaky wifi; the same key replayed within 24h returns the cached response and will not double-toggle availability.
+</Tip>
 
 ### 2.2 Bulk (kitchen batches)
 
@@ -232,6 +248,10 @@ If subscribed to `stock.synced`, klikit fires when propagation completes per pro
 ## 3. Menu Push
 
 For partners that own the master menu (typically white-label storefronts and PMS-backed POS systems). klikit becomes a downstream consumer: you push your canonical menu and klikit handles aggregator transformations.
+
+<Warning>
+  POS partners typically do **not** push menus. The klikit dashboard is the master catalogue for POS integrations; you read it via §1.1 and register Mapping (§1.3) against your own SKUs. Pushing a menu from a POS will overwrite the dashboard's structure — only do this if your contract explicitly designates you as the menu source of truth.
+</Warning>
 
 ### 3.1 Push the menu
 
@@ -384,7 +404,9 @@ Validation runs before any persistence. Common errors:
 | `validation.invalid_locale` | Locale code not in supported set |
 | `validation.image_unreachable` | `image_url` returns non-2xx or non-image content-type |
 
-The full payload is rejected on any validation error — Menu Push is all-or-nothing for v1.
+<Warning>
+  Menu Push is **all-or-nothing for v1**. Any single validation error rejects the entire payload — partial menus are never persisted. Fix every reported error and resubmit the complete tree.
+</Warning>
 
 ### 3.4 Publishing to delivery providers
 
@@ -435,6 +457,6 @@ The "auto via Push" cell means: when a white-label partner uses Menu Push, mappi
 
 ## See Also
 
-- [Authentication](./authentication.md) — scopes, idempotency, signing
-- [Orders](./orders.md) — order schema (where `partner_item_id` populates from §1 mappings)
+- [Authentication](./authentication) — scopes, idempotency, signing
+- [Orders](./orders) — order schema (where `partner_item_id` populates from §1 mappings)
 - [OpenAPI Spec](./openapi/menus.yaml) — machine-readable spec
