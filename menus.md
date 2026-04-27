@@ -199,7 +199,7 @@ A stock update is acknowledged synchronously (item is OOS in klikit immediately)
 
 | Provider | Typical | P95 |
 |---|---|---|
-| klikit (direct webshop) | <1s | <2s |
+| klikit (direct webshop) | `<1s` | `<2s` |
 | GrabFood | 5-15s | 60s |
 | Uber Eats | 10-30s | 90s |
 | Foodpanda | 5-15s | 60s |

@@ -91,6 +91,6 @@ Detailed onboarding sequence in [Authentication](./authentication.md).
 
 ## Support
 
-- **Onboarding & credentials:** {{ TBD — partner ops contact }}
-- **Technical questions:** {{ TBD — developer support email or portal }}
-- **Status page:** {{ TBD — status.klikit.io or equivalent }}
+- **Onboarding & credentials:** `TBD — partner ops contact`
+- **Technical questions:** `TBD — developer support email or portal`
+- **Status page:** `TBD — status.klikit.io or equivalent`

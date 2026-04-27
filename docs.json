@@ -1,0 +1,69 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "klikit Partner API",
+  "description": "Receive orders, sync menus, and manage availability across every delivery provider — through one documented contract.",
+  "colors": {
+    "primary": "#0EA5E9",
+    "light": "#38BDF8",
+    "dark": "#0369A1"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "authentication"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "orders",
+              "menus"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "openapi": "openapi/auth.yaml"
+          },
+          {
+            "group": "Orders",
+            "openapi": "openapi/orders.yaml"
+          },
+          {
+            "group": "Menus",
+            "openapi": "openapi/menus.yaml"
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Support",
+        "href": "mailto:partners@klikit.io"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Request Credentials",
+      "href": "mailto:partners@klikit.io"
+    }
+  },
+  "footer": {
+    "socials": {
+      "website": "https://klikit.io"
+    }
+  }
+}
