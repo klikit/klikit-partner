@@ -18,32 +18,23 @@ Outbound order webhooks (klikit → partner), the partner-side status callback A
 
 klikit's canonical states:
 
-```
-                    ┌──────────────┐
-                    │   PLACED (1) │  ← order.placed webhook fires
-                    └──────┬───────┘
-                           │
-                  partner: accept / reject
-                           │
-              ┌────────────┼────────────┐
-              ▼                         ▼
-      ┌───────────────┐         ┌───────────────┐
-      │  ACCEPTED (2) │         │ CANCELLED (3) │  ← terminal
-      └──────┬────────┘         └───────────────┘
-             │
-     partner: mark ready
-             ▼
-      ┌───────────────┐
-      │   READY (4)   │
-      └──────┬────────┘
-             │
-     ┌───────┴────────┐
-     ▼                ▼
-┌──────────┐    ┌──────────────┐
-│ PICKED_  │    │ DELIVERED(5) │  ← terminal (delivery)
-│ UP (9)   │    └──────────────┘
-└──────────┘
-   ↑ terminal (pickup / dine-in / scan-to-order)
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> placed: order.placed webhook
+    placed --> accepted: partner accepts
+    placed --> cancelled: partner rejects
+    accepted --> ready: partner marks ready
+    accepted --> cancelled: partner cancels
+    ready --> picked_up: pickup / dine-in / STO
+    ready --> delivered: delivery (rider-driven)
+    ready --> cancelled: partner cancels
+    picked_up --> [*]
+    delivered --> [*]
+    cancelled --> [*]
+
+    classDef terminal fill:#7E22CE,stroke:#A855F7,color:#fff
+    class picked_up,delivered,cancelled terminal
 ```
 
 <Note>
