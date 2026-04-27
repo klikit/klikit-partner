@@ -1,0 +1,2 @@
+# Per-user Claude Code overrides — keep out of the public docs repo
+.claude/settings.local.json
