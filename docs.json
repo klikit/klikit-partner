@@ -4,9 +4,9 @@
   "name": "klikit Partner API",
   "description": "Receive orders, sync menus, and manage availability across every delivery provider — through one documented contract.",
   "colors": {
-    "primary": "#0EA5E9",
-    "light": "#38BDF8",
-    "dark": "#0369A1"
+    "primary": "#A855F7",
+    "light": "#C084FC",
+    "dark": "#7E22CE"
   },
   "navigation": {
     "tabs": [
