@@ -1,0 +1,525 @@
+openapi: 3.1.0
+info:
+  title: klikit Partner API — Orders
+  version: 1.0.0
+  description: |
+    Order webhooks (klikit → partner) and the partner-side status callback API.
+
+    See [Orders](../orders.md) for the prose contract and per-provider considerations.
+  contact:
+    name: klikit Partner Integrations
+    email: TBD-partner-contact@klikit.io
+  license:
+    name: Proprietary — klikit Partner Integration Terms
+    url: https://TBD-legal-url.example.com/partner-terms
+servers:
+  - url: https://TBD-production-host.example.com
+    description: Production
+  - url: https://TBD-sandbox-host.example.com
+    description: Sandbox
+
+tags:
+  - name: Orders
+    description: Order reads and status callbacks (partner → klikit)
+  - name: Reference
+    description: Cancel reasons, providers
+  - name: Webhooks
+    description: Outbound order webhooks (klikit → partner)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/partner/orders:
+    get:
+      tags: [Orders]
+      summary: List orders (paginated)
+      description: |
+        Returns orders for the authenticated partner's business. Use cursor pagination —
+        cursors are opaque and not stable across deploys.
+      operationId: listOrders
+      parameters:
+        - { name: status,        in: query, schema: { $ref: '#/components/schemas/OrderStatusAlias' } }
+        - { name: provider_id,   in: query, schema: { type: integer } }
+        - { name: brand_id,      in: query, schema: { type: integer } }
+        - { name: branch_id,     in: query, schema: { type: integer } }
+        - { name: placed_from,   in: query, schema: { type: string, format: date-time } }
+        - { name: placed_to,     in: query, schema: { type: string, format: date-time } }
+        - { name: cursor,        in: query, schema: { type: string }, description: Opaque cursor from prior X-Klikit-Next-Cursor }
+        - { name: limit,         in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200':
+          description: Order list
+          headers:
+            X-Klikit-Next-Cursor:
+              schema: { type: string }
+              description: Pass to `cursor` query param to fetch next page. Absent when no more pages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+
+  /v1/partner/orders/{order_id}:
+    get:
+      tags: [Orders]
+      summary: Get a single order
+      operationId: getOrder
+      parameters:
+        - { name: order_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/partner/orders/{order_id}/status:
+    patch:
+      tags: [Orders]
+      summary: Advance order status (accept, reject, ready, picked_up, cancel)
+      description: |
+        Partner-driven status transitions. Valid transitions:
+        - placed → accepted | cancelled
+        - accepted → ready | cancelled
+        - ready → picked_up (pickup/dine-in only) | cancelled
+        - picked_up, delivered, cancelled → terminal (no transitions)
+
+        `delivery` orders are completed by the rider/aggregator, not the partner —
+        do not call with `status: picked_up` for those.
+      operationId: updateOrderStatus
+      parameters:
+        - { name: order_id, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StatusUpdateRequest' }
+            examples:
+              accept:
+                value: { status: accepted, estimated_ready_at: "2026-04-27T10:30:00Z" }
+              cancel:
+                value: { status: cancelled, reason_code: out_of_items, note: "Beef patty 86'd" }
+              ready:
+                value: { status: ready }
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatusUpdateResponse' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Conflict — invalid transition or provider rejected cancel
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                invalid_transition:
+                  value:
+                    error:
+                      code: invalid_status_transition
+                      message: Cannot move from 'delivered' to 'accepted'
+                provider_rejected:
+                  value:
+                    error:
+                      code: provider_rejected_cancel
+                      message: Aggregator refused cancellation — rider already assigned
+        '422':
+          description: Missing cancel reason
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /v1/partner/orders/cancel-reasons:
+    get:
+      tags: [Reference]
+      summary: List cancel reason codes
+      operationId: listCancelReasons
+      responses:
+        '200':
+          description: Reasons
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/CancelReason' }
+
+  /v1/partner/providers:
+    get:
+      tags: [Reference]
+      summary: List active aggregator providers
+      operationId: listProviders
+      responses:
+        '200':
+          description: Providers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Provider' }
+
+webhooks:
+  order.placed:
+    post:
+      tags: [Webhooks]
+      operationId: webhookOrderPlaced
+      summary: New order received by klikit
+      description: |
+        Fires when a new order arrives, regardless of channel (marketplace, webshop, dine-in, scan-to-order).
+        Your endpoint must respond 2xx within 10s. Verify the HMAC signature in the
+        `X-Klikit-Signature` header before trusting the body — see [Authentication §4](../authentication.md#4-outbound-webhook-signing-hmac).
+      requestBody:
+        $ref: '#/components/requestBodies/OrderEventBody'
+      responses:
+        '200':
+          description: Acknowledged. Any 2xx is treated as success.
+
+  order.updated:
+    post:
+      tags: [Webhooks]
+      operationId: webhookOrderUpdated
+      summary: Order details updated (not status)
+      description: Customer note, address, or delivery instruction changed.
+      requestBody:
+        $ref: '#/components/requestBodies/OrderEventBody'
+      responses:
+        '200': { description: Acknowledged }
+
+  order.cancelled:
+    post:
+      tags: [Webhooks]
+      operationId: webhookOrderCancelled
+      summary: Order cancelled (any party)
+      requestBody:
+        $ref: '#/components/requestBodies/OrderEventBody'
+      responses:
+        '200': { description: Acknowledged }
+
+  order.amended:
+    post:
+      tags: [Webhooks]
+      operationId: webhookOrderAmended
+      summary: Post-hoc correction to a completed order
+      description: |
+        Post-hoc correction issued by klikit (e.g. accounting/reconciliation fix).
+        Replacement payload, not a delta — reconcile the entire order against this body.
+      requestBody:
+        $ref: '#/components/requestBodies/OrderEventBody'
+      responses:
+        '200': { description: Acknowledged }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+      description: Replay-safe key. klikit caches the response for 24h.
+
+  requestBodies:
+    OrderEventBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/OrderEvent' }
+          examples:
+            order_placed:
+              summary: order.placed event
+              value:
+                event_id: 01HX7K4J4M9V2P0Q5T8Z3W6Y1B
+                event_type: order.placed
+                event_version: "1.0"
+                created_at: "2026-04-27T10:14:23Z"
+                business_id: 42
+                data:
+                  id: ord_01HX7K4J4M9V2P0Q5T8Z3W6Y1B
+                  short_id: K7X9M2
+                  external_id: GF-20260427-12345
+                  business_id: 42
+                  brand_id: 10
+                  branch_id: 100
+                  provider: { id: 6, name: grabfood, display_name: GrabFood }
+                  channel: marketplace
+                  status: placed
+                  status_code: 1
+                  order_type: delivery
+                  placed_at: "2026-04-27T10:14:20Z"
+                  customer:
+                    name: Aiko Tanaka
+                    phone: "+66800000000"
+                    email: null
+                  items:
+                    - klikit_item_id: 12345
+                      partner_item_id: POS-SKU-998
+                      sku: BURGER-CLASSIC
+                      name: Classic Cheeseburger
+                      quantity: 2
+                      unit_price: 199.00
+                      subtotal: 398.00
+                      modifiers: []
+                  totals:
+                    currency: THB
+                    subtotal: 398.00
+                    delivery_fee: 25.00
+                    service_fee: 10.00
+                    vat_amount: 30.66
+                    merchant_total: 463.00
+                    customer_total: 463.00
+                  payment: { method: card, status: paid, is_prepaid: true }
+
+  responses:
+    Unauthenticated:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InsufficientScope:
+      description: Token lacks required scope
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Order not found, or not owned by this partner's business
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    OrderStatusAlias:
+      type: string
+      enum: [placed, accepted, cancelled, ready, delivered, picked_up]
+
+    Order:
+      type: object
+      required: [id, short_id, business_id, brand_id, branch_id, provider, channel, status, status_code, order_type, placed_at, customer, items, totals, payment, fulfilment, created_at, updated_at]
+      properties:
+        id:               { type: string, description: klikit-issued opaque id }
+        short_id:         { type: string, description: Human-friendly id surfaced on receipts }
+        external_id:      { type: [string, "null"], description: "Provider-side id (e.g. GrabFood order #)" }
+        business_id:      { type: integer }
+        brand_id:         { type: integer }
+        branch_id:        { type: integer }
+        provider:         { $ref: '#/components/schemas/Provider' }
+        channel:          { type: string, enum: [marketplace, webshop, dine_in, scan_to_order] }
+        status:           { $ref: '#/components/schemas/OrderStatusAlias' }
+        status_code:      { type: integer, description: "Numeric status (1=placed, 2=accepted, 3=cancelled, 4=ready, 5=delivered, 9=picked_up)" }
+        status_history:
+          type: array
+          items:
+            type: object
+            required: [status, at, by]
+            properties:
+              status: { $ref: '#/components/schemas/OrderStatusAlias' }
+              at:     { type: string, format: date-time }
+              by:     { type: string, enum: [system, partner, aggregator, customer, operator] }
+              reason_code: { type: [string, "null"] }
+        order_type:       { type: string, enum: [pickup, delivery, dine_in, scan_to_order] }
+        placed_at:        { type: string, format: date-time }
+        scheduled_for:    { type: [string, "null"], format: date-time }
+        customer:         { $ref: '#/components/schemas/Customer' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderItem' }
+        totals:           { $ref: '#/components/schemas/OrderTotals' }
+        payment:          { $ref: '#/components/schemas/Payment' }
+        fulfilment:       { $ref: '#/components/schemas/Fulfilment' }
+        metadata:
+          type: object
+          properties:
+            cutlery:           { type: [boolean, "null"] }
+            tax_id:            { type: [string, "null"] }
+            is_dine_in_table:  { type: [string, "null"] }
+            provider_metadata: { type: object, additionalProperties: true }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+
+    Customer:
+      type: object
+      required: [name, phone]
+      properties:
+        name:    { type: string }
+        phone:   { type: string }
+        email:   { type: [string, "null"], format: email }
+        address:
+          type: [object, "null"]
+          required: [line1, country]
+          properties:
+            line1:        { type: string }
+            line2:        { type: [string, "null"] }
+            city:         { type: string }
+            postcode:     { type: [string, "null"] }
+            country:      { type: string, description: ISO-3166-1 alpha-2 }
+            latitude:     { type: [number, "null"] }
+            longitude:    { type: [number, "null"] }
+            instructions: { type: [string, "null"] }
+
+    OrderItem:
+      type: object
+      required: [klikit_item_id, name, quantity, unit_price, subtotal]
+      properties:
+        klikit_item_id:       { type: integer }
+        partner_item_id:      { type: [string, "null"], description: "Populated only if a mapping is registered" }
+        sku:                  { type: [string, "null"] }
+        name:                 { type: string }
+        quantity:             { type: integer, minimum: 1 }
+        unit_price:           { type: number }
+        subtotal:             { type: number }
+        modifiers:
+          type: array
+          items: { $ref: '#/components/schemas/OrderModifier' }
+        special_instructions: { type: [string, "null"] }
+        vat_amount:           { type: [number, "null"] }
+
+    OrderModifier:
+      type: object
+      required: [klikit_modifier_id, name, unit_price, quantity, subtotal]
+      properties:
+        klikit_modifier_id:   { type: integer }
+        partner_modifier_id:  { type: [string, "null"] }
+        group_name:           { type: [string, "null"] }
+        name:                 { type: string }
+        unit_price:           { type: number }
+        quantity:             { type: integer, minimum: 1 }
+        subtotal:             { type: number }
+
+    OrderTotals:
+      type: object
+      required: [currency, subtotal, merchant_total, customer_total]
+      properties:
+        currency:        { type: string, description: ISO-4217 }
+        currency_symbol: { type: [string, "null"] }
+        subtotal:        { type: number }
+        discount_amount: { type: number, default: 0 }
+        delivery_fee:    { type: number, default: 0 }
+        service_fee:     { type: number, default: 0 }
+        additional_fee:  { type: number, default: 0 }
+        vat_amount:      { type: number, default: 0 }
+        merchant_total:  { type: number, description: What the merchant is owed }
+        customer_total:  { type: number, description: What the customer paid }
+
+    Payment:
+      type: object
+      required: [method, status, is_prepaid]
+      properties:
+        method:     { type: string, enum: [cash, card, wallet, invoice] }
+        channel_id: { type: [integer, "null"] }
+        status:     { type: string, enum: [paid, pending, failed, refunded] }
+        is_prepaid: { type: boolean }
+
+    Fulfilment:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [self_pickup, rider_delivery, dine_in] }
+        rider:
+          type: [object, "null"]
+          properties:
+            status:  { type: string, enum: [searching, assigned, arrived, en_route, completed, failed] }
+            name:    { type: [string, "null"] }
+            phone:   { type: [string, "null"] }
+            vehicle: { type: [string, "null"] }
+        pickup_at:    { type: [string, "null"], format: date-time }
+        delivered_at: { type: [string, "null"], format: date-time }
+
+    Provider:
+      type: object
+      required: [id, name, display_name]
+      properties:
+        id:           { type: integer }
+        name:         { type: string, example: grabfood }
+        display_name: { type: string, example: GrabFood }
+
+    CancelReason:
+      type: object
+      required: [code, label]
+      properties:
+        code:  { type: string, example: out_of_items }
+        label: { type: string, example: "Items unavailable" }
+
+    StatusUpdateRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted, cancelled, ready, picked_up]
+          description: "`placed` and `delivered` are not partner-settable."
+        reason_code:
+          type: [string, "null"]
+          description: "Required when status=cancelled. See /v1/partner/orders/cancel-reasons."
+        estimated_ready_at:
+          type: [string, "null"]
+          format: date-time
+        note:
+          type: [string, "null"]
+
+    StatusUpdateResponse:
+      type: object
+      required: [id, status, status_code, updated_at, provider_propagation]
+      properties:
+        id:          { type: string }
+        status:      { $ref: '#/components/schemas/OrderStatusAlias' }
+        status_code: { type: integer }
+        updated_at:  { type: string, format: date-time }
+        provider_propagation:
+          type: object
+          required: [state]
+          properties:
+            state:         { type: string, enum: [queued, propagated, failed, not_required] }
+            attempted_at:  { type: [string, "null"], format: date-time }
+            error:         { type: [string, "null"] }
+
+    OrderEvent:
+      type: object
+      required: [event_id, event_type, event_version, created_at, business_id, data]
+      properties:
+        event_id:      { type: string, format: uuid }
+        event_type:    { type: string, enum: [order.placed, order.updated, order.cancelled, order.amended] }
+        event_version: { type: string, example: "1.0" }
+        created_at:    { type: string, format: date-time }
+        business_id:   { type: integer }
+        data:          { $ref: '#/components/schemas/Order' }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }

@@ -1,0 +1,157 @@
+openapi: 3.1.0
+info:
+  title: klikit Partner API — Authentication
+  version: 1.0.0
+  description: |
+    OAuth2 client credentials flow for klikit partners.
+
+    See [Authentication](../authentication.md) for the prose contract.
+  contact:
+    name: klikit Partner Integrations
+    email: TBD-partner-contact@klikit.io
+  license:
+    name: Proprietary — klikit Partner Integration Terms
+    url: https://TBD-legal-url.example.com/partner-terms
+servers:
+  - url: https://TBD-production-host.example.com
+    description: Production
+  - url: https://TBD-sandbox-host.example.com
+    description: Sandbox
+
+tags:
+  - name: Auth
+    description: OAuth2 token issuance
+
+paths:
+  /v1/partner/oauth/token:
+    post:
+      tags: [Auth]
+      summary: Exchange client credentials for an access token
+      description: |
+        OAuth2 `client_credentials` grant. Returns a short-lived bearer token
+        (default TTL 1 hour). Re-request a token before expiry —
+        there is no refresh token in this flow.
+      operationId: issueToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+            examples:
+              all-scopes:
+                summary: POS partner requesting all scopes
+                value:
+                  grant_type: client_credentials
+                  client_id: pk_live_a1b2c3
+                  client_secret: sk_live_xxxxxxxxxxxx
+                  scope: orders:read orders:write menus:read mapping:write stock:write
+              read-only:
+                summary: ERP partner — read only
+                value:
+                  grant_type: client_credentials
+                  client_id: pk_live_d4e5f6
+                  client_secret: sk_live_yyyyyyyyyyyy
+                  scope: orders:read
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                access_token: eyJhbGciOiJIUzI1NiIs...
+                token_type: Bearer
+                expires_in: 3600
+                scope: orders:read orders:write menus:read mapping:write stock:write
+        '400':
+          $ref: '#/components/responses/OAuthError'
+        '401':
+          $ref: '#/components/responses/OAuthError'
+        '429':
+          description: Rate limited (60 token requests/min/client_id)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before retrying
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from `/v1/partner/oauth/token`. Required on all partner-facing endpoints in `orders.yaml` and `menus.yaml`.
+
+  schemas:
+    TokenRequest:
+      type: object
+      required: [grant_type, client_id, client_secret]
+      properties:
+        grant_type:
+          type: string
+          enum: [client_credentials]
+        client_id:
+          type: string
+          description: Issued by klikit at onboarding.
+          example: pk_live_a1b2c3
+        client_secret:
+          type: string
+          format: password
+          description: Issued by klikit at onboarding. Rotatable.
+        scope:
+          type: string
+          description: |
+            Space-separated subset of granted scopes. If omitted, all scopes
+            granted to the credential are issued.
+          example: orders:read orders:write menus:read mapping:write stock:write
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, scope]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Seconds until access_token expires.
+          example: 3600
+        scope:
+          type: string
+          description: Space-separated scopes actually granted.
+
+    OAuthError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum: [invalid_request, invalid_client, invalid_grant, invalid_scope, unsupported_grant_type, rate_limit_exceeded]
+        error_description:
+          type: string
+
+  responses:
+    OAuthError:
+      description: OAuth2 error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OAuthError'
+          examples:
+            invalid_client:
+              value:
+                error: invalid_client
+                error_description: Client authentication failed.
+            invalid_scope:
+              value:
+                error: invalid_scope
+                error_description: Requested scope not granted to this credential.

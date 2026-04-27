@@ -1,0 +1,759 @@
+openapi: 3.1.0
+info:
+  title: klikit Partner API — Menus
+  version: 1.0.0
+  description: |
+    Menu Mapping (POS-critical), Stock Sync, and Menu Push.
+
+    See [Menus](../menus.md) for the prose contract.
+  contact:
+    name: klikit Partner Integrations
+    email: TBD-partner-contact@klikit.io
+  license:
+    name: Proprietary — klikit Partner Integration Terms
+    url: https://TBD-legal-url.example.com/partner-terms
+servers:
+  - url: https://TBD-production-host.example.com
+    description: Production
+  - url: https://TBD-sandbox-host.example.com
+    description: Sandbox
+
+tags:
+  - name: Menu Read
+    description: Discover klikit's canonical menu
+  - name: Mapping
+    description: Map partner IDs ↔ klikit IDs
+  - name: Stock
+    description: OOS / availability / stock quantity
+  - name: Menu Push
+    description: Push partner-owned master menu into klikit
+
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/partner/menus:
+    get:
+      tags: [Menu Read]
+      summary: Get full menu tree for a store
+      operationId: getMenuTree
+      parameters:
+        - { name: branch_id, in: query, required: true, schema: { type: integer } }
+        - { name: brand_id,  in: query, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Menu tree
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/MenuTree' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+
+    post:
+      tags: [Menu Push]
+      summary: Push a complete menu (async)
+      description: |
+        Submits a partner-owned menu to klikit. Returns a `job_id` immediately;
+        validation, persistence, and aggregator sync happen asynchronously.
+        Poll `GET /v1/partner/menus/jobs/{job_id}` or subscribe to `menu.job.completed`.
+      operationId: pushMenu
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MenuPushRequest' }
+      responses:
+        '202':
+          description: Accepted — job created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MenuJob' }
+        '400':
+          description: Validation error (synchronous, before job creation)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+
+  /v1/partner/menus/items:
+    get:
+      tags: [Menu Read]
+      summary: Paginated flat list of items
+      operationId: listMenuItems
+      parameters:
+        - { name: branch_id, in: query, required: true, schema: { type: integer } }
+        - { name: page,      in: query, schema: { type: integer, default: 1 } }
+        - { name: limit,     in: query, schema: { type: integer, default: 100, maximum: 500 } }
+      responses:
+        '200':
+          description: Items
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/MenuItem' }
+                  pagination:
+                    type: object
+                    properties:
+                      page:        { type: integer }
+                      limit:       { type: integer }
+                      total_items: { type: integer }
+                      total_pages: { type: integer }
+
+  /v1/partner/menus/items/{klikit_item_id}:
+    get:
+      tags: [Menu Read]
+      summary: Get item detail (with modifier groups)
+      operationId: getMenuItem
+      parameters:
+        - { name: klikit_item_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Item
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/MenuItem' }
+
+  /v1/partner/menus/items/{klikit_item_id}/stock:
+    get:
+      tags: [Stock]
+      summary: Current stock state per provider
+      operationId: getItemStock
+      parameters:
+        - { name: klikit_item_id, in: path, required: true, schema: { type: integer } }
+        - { name: branch_id,      in: query, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Stock state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ItemStockState' }
+
+  /v1/partner/menus/mappings/lookup:
+    post:
+      tags: [Mapping]
+      summary: Bulk lookup klikit IDs by partner IDs
+      operationId: lookupMappings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, partner_ids]
+              properties:
+                type:
+                  type: string
+                  enum: [item, category, modifier_group]
+                partner_ids:
+                  type: array
+                  items: { type: string }
+                  maxItems: 500
+      responses:
+        '200':
+          description: Lookup result. Unmapped partner_ids return null.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    additionalProperties:
+                      oneOf:
+                        - $ref: '#/components/schemas/MappingHit'
+                        - type: "null"
+
+  /v1/partner/menus/items/mappings:
+    post:
+      tags: [Mapping]
+      summary: Bulk upsert item mappings
+      operationId: upsertItemMappings
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MappingUpsertRequest' }
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MappingUpsertResponse' }
+    delete:
+      tags: [Mapping]
+      summary: Bulk delete item mappings
+      operationId: deleteItemMappings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [klikit_ids]
+              properties:
+                klikit_ids:
+                  type: array
+                  items: { type: integer }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: integer }
+
+  /v1/partner/menus/categories/mappings:
+    post:
+      tags: [Mapping]
+      summary: Bulk upsert category mappings
+      operationId: upsertCategoryMappings
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MappingUpsertRequest' }
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MappingUpsertResponse' }
+
+  /v1/partner/menus/modifier-groups/mappings:
+    post:
+      tags: [Mapping]
+      summary: Bulk upsert modifier group mappings
+      operationId: upsertModifierGroupMappings
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MappingUpsertRequest' }
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MappingUpsertResponse' }
+
+  /v1/partner/menus/stock/{partner_item_id}:
+    patch:
+      tags: [Stock]
+      summary: Update OOS / availability / stock for one item
+      description: |
+        Resolves `partner_item_id` via mapping registered for this credential.
+        Returns 404 if no mapping exists.
+      operationId: updateItemStock
+      parameters:
+        - { name: partner_item_id, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StockUpdateRequest' }
+            examples:
+              soft_oos_1h:
+                summary: Sold out for an hour
+                value: { branch_id: 100, snooze_duration_seconds: 3600 }
+              hard_disable:
+                summary: Disable until manually re-enabled
+                value: { branch_id: 100, is_enabled: false }
+              restock:
+                summary: Back in stock
+                value: { branch_id: 100, is_enabled: true }
+              stock_count:
+                summary: 47 left
+                value: { branch_id: 100, stock_quantity: 47, is_enabled: true }
+      responses:
+        '200':
+          description: Acknowledged (klikit immediate; aggregator propagation async)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockUpdateResponse' }
+        '404':
+          description: No mapping registered for this partner_item_id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: Conflicting fields (e.g. snooze_duration_seconds AND snooze_until_turn_back)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /v1/partner/menus/stock/bulk:
+    patch:
+      tags: [Stock]
+      summary: Bulk OOS / availability / stock update
+      operationId: bulkUpdateItemStock
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BulkStockUpdateRequest' }
+      responses:
+        '200':
+          description: Per-row results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BulkStockUpdateResponse' }
+
+  /v1/partner/menus/jobs/{job_id}:
+    get:
+      tags: [Menu Push]
+      summary: Get menu push/publish job status
+      operationId: getMenuJob
+      parameters:
+        - { name: job_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MenuJob' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/partner/menus/publish:
+    post:
+      tags: [Menu Push]
+      summary: Publish current menu draft to aggregators
+      operationId: publishMenu
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch_id]
+              properties:
+                branch_id:    { type: integer }
+                provider_ids:
+                  type: array
+                  items: { type: integer }
+                  description: Empty/omitted = all configured providers for the branch
+      responses:
+        '202':
+          description: Publish job created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MenuJob' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthenticated:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InsufficientScope:
+      description: Token lacks required scope
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    LangMap:
+      type: object
+      description: Map of locale code → string. At least one entry required.
+      additionalProperties: { type: string }
+      minProperties: 1
+      example: { en: "Classic Cheeseburger", th: "ชีสเบอร์เกอร์คลาสสิก" }
+
+    MenuTree:
+      type: object
+      required: [branch_id, brand_id, currency, sections]
+      properties:
+        branch_id: { type: integer }
+        brand_id:  { type: integer }
+        currency:  { type: string }
+        sections:
+          type: array
+          items: { $ref: '#/components/schemas/MenuSection' }
+
+    MenuSection:
+      type: object
+      required: [klikit_id, title, categories]
+      properties:
+        klikit_id:          { type: integer }
+        partner_section_id: { type: [string, "null"] }
+        title:              { $ref: '#/components/schemas/LangMap' }
+        available_times:
+          type: array
+          items: { $ref: '#/components/schemas/AvailableTime' }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/MenuCategory' }
+
+    MenuCategory:
+      type: object
+      required: [klikit_id, title, items]
+      properties:
+        klikit_id:           { type: integer }
+        partner_category_id: { type: [string, "null"] }
+        title:               { $ref: '#/components/schemas/LangMap' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MenuItem' }
+
+    MenuItem:
+      type: object
+      required: [klikit_id, title, prices, is_enabled]
+      properties:
+        klikit_id:        { type: integer }
+        partner_item_id:  { type: [string, "null"] }
+        sku:              { type: [string, "null"] }
+        title:            { $ref: '#/components/schemas/LangMap' }
+        description:      { $ref: '#/components/schemas/LangMap' }
+        image_url:        { type: [string, "null"], format: uri }
+        prices:           { $ref: '#/components/schemas/Prices' }
+        vat_rate:         { type: [number, "null"] }
+        is_enabled:       { type: boolean }
+        modifier_groups:
+          type: array
+          items: { $ref: '#/components/schemas/ModifierGroup' }
+
+    ModifierGroup:
+      type: object
+      required: [klikit_id, title, modifiers]
+      properties:
+        klikit_id:                  { type: integer }
+        partner_modifier_group_id:  { type: [string, "null"] }
+        title:                      { $ref: '#/components/schemas/LangMap' }
+        min_select:                 { type: integer, default: 0 }
+        max_select:                 { type: integer, default: 1 }
+        modifiers:
+          type: array
+          items: { $ref: '#/components/schemas/Modifier' }
+
+    Modifier:
+      type: object
+      required: [klikit_id, title, price, is_enabled]
+      properties:
+        klikit_id:           { type: integer }
+        partner_modifier_id: { type: [string, "null"] }
+        title:               { $ref: '#/components/schemas/LangMap' }
+        price:               { type: number }
+        is_enabled:          { type: boolean }
+
+    AvailableTime:
+      type: object
+      required: [day, start, end]
+      properties:
+        day:
+          oneOf:
+            - { type: integer, minimum: 0, maximum: 6 }
+            - { type: string, enum: [all] }
+        start: { type: string, example: "09:00" }
+        end:   { type: string, example: "22:00" }
+
+    Prices:
+      type: object
+      description: |
+        `default` is the fallback. `by_provider` overrides per aggregator.
+        Provider keys must come from `GET /v1/partner/providers` (use `name`).
+      required: [default]
+      properties:
+        default: { type: number }
+        by_provider:
+          type: object
+          additionalProperties: { type: number }
+          example: { grabfood: 219.00, uber_eats: 219.00 }
+
+    MappingHit:
+      type: object
+      required: [klikit_id]
+      properties:
+        klikit_id: { type: integer }
+        name:      { type: string }
+        sku:       { type: [string, "null"] }
+
+    MappingUpsertRequest:
+      type: object
+      required: [branch_id, mappings]
+      properties:
+        branch_id: { type: integer }
+        mappings:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            required: [klikit_id, partner_id]
+            properties:
+              klikit_id:    { type: integer }
+              partner_id:   { type: string }
+              partner_sku:  { type: [string, "null"] }
+              partner_name: { type: [string, "null"] }
+
+    MappingUpsertResponse:
+      type: object
+      required: [applied, skipped, errors]
+      properties:
+        applied: { type: integer }
+        skipped: { type: integer }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              klikit_id:  { type: [integer, "null"] }
+              partner_id: { type: [string, "null"] }
+              code:       { type: string }
+              message:    { type: string }
+
+    StockUpdateRequest:
+      type: object
+      required: [branch_id]
+      properties:
+        branch_id:                { type: integer }
+        is_enabled:               { type: [boolean, "null"] }
+        stock_quantity:           { type: [integer, "null"], minimum: 0 }
+        snooze_duration_seconds:  { type: [integer, "null"], minimum: 1 }
+        snooze_until_turn_back:   { type: [boolean, "null"] }
+
+    StockUpdateResponse:
+      type: object
+      required: [klikit_item_id, partner_item_id, branch_id, applied_at]
+      properties:
+        klikit_item_id:  { type: integer }
+        partner_item_id: { type: string }
+        branch_id:       { type: integer }
+        applied_at:      { type: string, format: date-time }
+        propagation:
+          type: object
+          properties:
+            state: { type: string, enum: [queued, propagating, partial, completed, failed] }
+
+    BulkStockUpdateRequest:
+      type: object
+      required: [branch_id, updates]
+      properties:
+        branch_id: { type: integer }
+        updates:
+          type: array
+          maxItems: 500
+          items:
+            allOf:
+              - { $ref: '#/components/schemas/StockUpdateRequest' }
+              - type: object
+                required: [partner_item_id]
+                properties:
+                  partner_item_id: { type: string }
+
+    BulkStockUpdateResponse:
+      type: object
+      required: [applied, failed, results]
+      properties:
+        applied: { type: integer }
+        failed:  { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            required: [partner_item_id, ok]
+            properties:
+              partner_item_id: { type: string }
+              ok:              { type: boolean }
+              code:            { type: [string, "null"] }
+              message:         { type: [string, "null"] }
+
+    ItemStockState:
+      type: object
+      required: [klikit_item_id, branch_id, is_enabled]
+      properties:
+        klikit_item_id: { type: integer }
+        branch_id:      { type: integer }
+        is_enabled:     { type: boolean }
+        stock_quantity: { type: [integer, "null"] }
+        snooze:
+          type: [object, "null"]
+          properties:
+            until_turn_back: { type: boolean }
+            ends_at:         { type: [string, "null"], format: date-time }
+        providers:
+          type: array
+          items:
+            type: object
+            required: [provider_id, name, status]
+            properties:
+              provider_id: { type: integer }
+              name:        { type: string }
+              status:      { type: string, enum: [synced, pending, failed, unsupported] }
+              synced_at:   { type: [string, "null"], format: date-time }
+
+    MenuPushRequest:
+      type: object
+      required: [branch_id, currency]
+      description: |
+        Either `sections` OR `items` must be provided. Use `items` for flat shapes —
+        klikit will synthesise a default section/category.
+      properties:
+        branch_id: { type: integer }
+        brand_id:  { type: integer }
+        currency:  { type: string, description: ISO-4217 }
+        sections:
+          type: array
+          items: { $ref: '#/components/schemas/MenuPushSection' }
+        items:
+          type: array
+          description: Flat alternative when partner has no section/category concept
+          items: { $ref: '#/components/schemas/MenuPushItem' }
+
+    MenuPushSection:
+      type: object
+      required: [partner_section_id, title, categories]
+      properties:
+        partner_section_id: { type: string }
+        title:              { $ref: '#/components/schemas/LangMap' }
+        available_times:
+          type: array
+          items: { $ref: '#/components/schemas/AvailableTime' }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/MenuPushCategory' }
+
+    MenuPushCategory:
+      type: object
+      required: [partner_category_id, title, items]
+      properties:
+        partner_category_id: { type: string }
+        title:               { $ref: '#/components/schemas/LangMap' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MenuPushItem' }
+
+    MenuPushItem:
+      type: object
+      required: [partner_item_id, title, prices, is_enabled]
+      properties:
+        partner_item_id: { type: string }
+        sku:             { type: [string, "null"] }
+        title:           { $ref: '#/components/schemas/LangMap' }
+        description:     { $ref: '#/components/schemas/LangMap' }
+        image_url:       { type: [string, "null"], format: uri }
+        prices:          { $ref: '#/components/schemas/Prices' }
+        vat_rate:        { type: [number, "null"] }
+        is_enabled:      { type: boolean }
+        modifier_groups:
+          type: array
+          items: { $ref: '#/components/schemas/MenuPushModifierGroup' }
+
+    MenuPushModifierGroup:
+      type: object
+      required: [partner_modifier_group_id, title, modifiers]
+      properties:
+        partner_modifier_group_id: { type: string }
+        title:                     { $ref: '#/components/schemas/LangMap' }
+        min_select:                { type: integer, default: 0 }
+        max_select:                { type: integer, default: 1 }
+        modifiers:
+          type: array
+          items: { $ref: '#/components/schemas/MenuPushModifier' }
+
+    MenuPushModifier:
+      type: object
+      required: [partner_modifier_id, title, price, is_enabled]
+      properties:
+        partner_modifier_id: { type: string }
+        title:               { $ref: '#/components/schemas/LangMap' }
+        price:               { type: number }
+        is_enabled:          { type: boolean }
+
+    MenuJob:
+      type: object
+      required: [job_id, status, submitted_at]
+      properties:
+        job_id:       { type: string }
+        status:       { type: string, enum: [pending, in_progress, completed, partial_success, failed] }
+        submitted_at: { type: string, format: date-time }
+        started_at:   { type: [string, "null"], format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
+        progress:
+          type: object
+          properties:
+            stages:
+              type: array
+              items:
+                type: object
+                required: [name, status]
+                properties:
+                  name:        { type: string, enum: [validation, klikit_persistence, aggregator_sync] }
+                  status:      { type: string, enum: [pending, in_progress, completed, failed, skipped] }
+                  duration_ms: { type: [integer, "null"] }
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      required: [provider_id, name, status]
+                      properties:
+                        provider_id: { type: integer }
+                        name:        { type: string }
+                        status:      { type: string, enum: [pending, in_progress, completed, failed] }
+                        error:       { type: [string, "null"] }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              code:    { type: string }
+              message: { type: string }
+              path:    { type: [string, "null"], description: "JSON pointer into the submitted payload" }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
