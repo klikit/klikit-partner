@@ -109,12 +109,12 @@ Scopes follow least-privilege: your credential is issued with only the subset yo
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `orders:read`   | `GET /v1/partner/orders` · `GET /v1/partner/orders/{id}` · `GET /v1/partner/orders/cancel-reasons`                                                                                    |
 | `orders:write`  | `PATCH /v1/partner/orders/{id}/status` (accept, reject, ready, picked-up, cancel)                                                                                                     |
-| `menus:read`    | `GET /v1/partner/menus` · `GET /v1/partner/menus/items` · `GET /v1/partner/menus/jobs/{id}`                                                                                           |
-| `menus:write`   | `POST /v1/partner/menus` (Menu Push) · `POST /v1/partner/menus/publish`                                                                                                               |
+| `menus:read`    | `GET /v1/partner/menus` · `GET /v1/partner/menus/items`                                                                                                                               |
+| ~~`menus:write`~~ | **Deferred to v1.x** — Menu Push (`POST /v1/partner/menus`, `POST /v1/partner/menus/publish`) lands once a white-label partner is signed.                                          |
 | `mapping:write` | `POST /v1/partner/menus/items/mappings` · `POST /v1/partner/menus/categories/mappings` · `POST /v1/partner/menus/modifier-groups/mappings` · `POST /v1/partner/menus/mappings/lookup` |
 | `stock:write`   | `PATCH /v1/partner/menus/stock/{partner_item_id}` · `PATCH /v1/partner/menus/stock/bulk`                                                                                              |
 
-Webhook subscriptions are configured per credential at issuance and are **not** scope-gated. klikit only delivers events you have explicitly subscribed to.
+Webhook routing is by **(business, brand, branch) scope**, not by event type. Your registered `webhook_url` receives **every** order lifecycle event for the business your credential is scoped to. Filter event types client-side if you only care about a subset (ERP integrations typically discard everything except `order.delivered`).
 
 ## Webhook signing (HMAC)
 
@@ -244,10 +244,7 @@ During rotation:
     klikit issues credentials for your business: `client_id`, `client_secret`, and `webhook_secret`.
   </Step>
   <Step title="Register your webhook URL">
-    Provide your HTTPS webhook endpoint to klikit Partner Operations.
-  </Step>
-  <Step title="Subscribe to events">
-    Choose the event types you want to receive (e.g. `order.placed`, `order.cancelled`).
+    Provide your HTTPS webhook endpoint to klikit Partner Operations. The endpoint receives every order lifecycle event for your credential's business scope — there is no per-event-type opt-in; filter on your side if you only want a subset.
   </Step>
   <Step title="Smoke-test the token exchange">
     Exchange `client_credentials` for a token to confirm your credentials work end-to-end.
@@ -255,8 +252,8 @@ During rotation:
   <Step title="Verify a sandbox webhook">
     klikit fires a sandbox order; confirm your endpoint verifies the HMAC signature and responds `200 OK`.
   </Step>
-  <Step title="Push initial menu data">
-    Push your initial menu mapping (POS integrations) or full menu (white-label integrations).
+  <Step title="Push initial Menu Mapping (POS integrations)">
+    Upload your SKU mappings. **Required pre-integration step for POS partners** — without it, stock signals and incoming-order SKU recognition do not work.
   </Step>
   <Step title="Live cutover">
     Your business is enabled for the production order flow.

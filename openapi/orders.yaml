@@ -265,7 +265,7 @@ webhooks:
       summary: Order delivered to customer
       description: |
         Terminal event for the delivery flow. Read-only for partners. ERP integrations
-        typically subscribe only to this event as their invoicing trigger.
+        typically act only on this event as their invoicing trigger and discard the others client-side.
       requestBody:
         $ref: '#/components/requestBodies/OrderEventBody'
       responses:

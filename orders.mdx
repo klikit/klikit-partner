@@ -73,7 +73,7 @@ klikit will reject invalid transitions with `409 Conflict` and an `error.code` o
 
 ## 2. Outbound Webhooks
 
-Subscribed events are delivered to your registered `webhook_url` (see [Authentication §9](/authentication#9-onboarding-sequence)). Every event is HMAC-signed.
+All order lifecycle events for your credential's business scope are delivered to your registered `webhook_url` (see [Authentication §9](/authentication#9-onboarding-sequence)). Routing is by (business, brand, branch) scope — there is no per-event-type opt-in. Filter event types client-side if you only care about a subset. Every event is HMAC-signed.
 
 ### Event envelope
 
@@ -115,7 +115,7 @@ Subscribed events are delivered to your registered `webhook_url` (see [Authentic
 **Note:** `order.placed` is fired **once** when the order first becomes visible. Status transitions you drive yourself (accept, ready, etc.) are not separate webhooks — you are the source of those via the status callback API. If the **aggregator** drives a status change (customer cancels via the provider's app, courier picks up an order, etc.), the corresponding event fires.
 
 <Tip>
-  Courier-lifecycle events are read-only — you cannot drive them. They reflect the upstream aggregator's view of the delivery and let you complete the audit trail for ERP / invoicing flows. ERP partners typically subscribe **only** to `order.delivered` (their invoicing trigger).
+  Courier-lifecycle events are read-only — you cannot drive them. They reflect the upstream aggregator's view of the delivery and let you complete the audit trail for ERP / invoicing flows. ERP partners typically **act only on** `order.delivered` (their invoicing trigger) and discard the others client-side — webhook routing delivers all events; filtering is your responsibility.
 </Tip>
 
 ---
