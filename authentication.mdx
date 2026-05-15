@@ -24,7 +24,15 @@ Each credential pair contains:
   Credentials are per `(partner_id, business_id)` pair. If you integrate with multiple businesses, request a separate credential set for each one.
 </Note>
 
+<Info>
+  **Multi-merchant POS partners — v1.1 (target: September 2026).** If you are a POS vendor integrating on behalf of many merchants (e.g. 10+ businesses), you will not need to manage one credential pair per merchant. v1.1 introduces a **single credential per partner with a `business_id` claim per request**. Multi-merchant POS deals currently in negotiation will land directly on v1.1 — talk to klikit Partner Operations about timing so you don't write integration code against the v1 per-business model and then have to re-plumb. Existing per-business credentials keep working indefinitely; the two models coexist.
+</Info>
+
 Credentials are issued by the klikit Partner Operations team during onboarding.
+
+<Tip>
+  **You receive `client_secret` and `webhook_secret` in plaintext exactly once — at issuance.** They are stored hashed; klikit cannot recover them later. Capture them immediately in your secrets manager. If you lose a secret, klikit Partner Operations revokes the credential and issues a new one (new `client_id`, re-register your `webhook_url`).
+</Tip>
 
 ## Obtaining a token
 

@@ -28,11 +28,15 @@ Every order arrives in a single canonical schema regardless of origin — provid
 | **POS** | Order webhooks + status callbacks + Menu Mapping + Stock Sync |
 | **ERP / accounting** | Order webhooks (`order.delivered`) + read-only order queries |
 | **Inventory system** | Menu Mapping + Stock Sync only |
-| **White-label storefront** | Menu Push + Order webhooks |
+| **White-label storefront** | Order webhooks (Menu Push lands in v1.x — talk to klikit if you need it sooner) |
 
 <Note>
   Capabilities are gated by OAuth2 scopes — your credential is issued with only the scopes your integration needs.
 </Note>
+
+<Warning>
+  **POS partners: Menu Mapping is a pre-integration requirement.** klikit's catalogue is the source of truth at integration time. Before your system can push stock signals or recognise items on incoming orders, you must register a mapping of your internal SKUs to klikit's item, category, and modifier-group IDs (per business). Plan for this in your integration kickoff — it's a one-time bulk upload per business, see [Menus → Menu Mapping](./menus#menu-mapping).
+</Warning>
 
 ## Capability matrix
 
@@ -44,8 +48,12 @@ Every order arrives in a single canonical schema regardless of origin — provid
 | Cancel reasons enum | partner → klikit | `orders:read` | Canonical list of cancel reasons for status callbacks |
 | Menu Mapping (lookup + upsert items, categories, modifier groups) | partner → klikit | `mapping:write` | Register your SKUs against klikit item IDs so orders carry `partner_item_id` and stock calls work with your own identifiers |
 | Stock Sync (single + bulk) | partner → klikit | `stock:write` | Push out-of-stock, snooze, or restock signals; klikit propagates to every aggregator |
-| Menu Push (full tree, async) | partner → klikit | `menus:write` | Submit your master catalogue; klikit handles all aggregator transformations |
 | Menu Read (canonical klikit menu) | partner → klikit | `menus:read` | Inspect klikit's canonical menu structure to build mappings against |
+| Sandbox environment | bidirectional | n/a | Parallel tenant for integration testing; synthetic order injection before production cutover. See [Sandbox](./sandbox). |
+
+<Note>
+  **Menu Push** (`POST /v1/partner/menus`, `menus:write`) is **not in v1** — Astro and A&W (our priority pilots) operate without it. If you own the master catalogue and need it, talk to klikit Partner Operations; it's prioritised for v1.x once a white-label partner is signed.
+</Note>
 
 ## Quick start
 
@@ -64,7 +72,8 @@ Detailed onboarding sequence in [Authentication](/authentication).
 | Live modification of in-flight aggregator orders | Aggregator platforms do not support API-driven in-flight edits. Use cancel + re-create. |
 | Payment processing / refunds | Separate contract — contact your klikit account manager. |
 | Customer PII bulk export | Privacy / compliance — PII is surfaced only on a per-order basis. |
-| Multi-business partner credentials (one token across multiple businesses) | Tracked for a future release. For v1, request one credential pair per business. |
+| Multi-business partner credentials (one token across multiple businesses) | **Planned for v1.1** (target: September 2026). For v1, request one credential pair per business. Multi-merchant POS vendors will land directly on v1.1 — talk to klikit Partner Operations about timing. |
+| Menu Push (`POST /v1/partner/menus`, `menus:write`) | **Planned for v1.x** — triggered by first white-label partner signature. POS, ERP, inventory integrations operate without it. |
 | Inbound order creation from partner (POS-originated dine-in into klikit's order management) | Out of scope for v1. |
 
 ## Next steps
@@ -77,6 +86,9 @@ Detailed onboarding sequence in [Authentication](/authentication).
     Order schema, lifecycle, outbound webhooks, and the status callback API.
   </Card>
   <Card title="Menus" icon="utensils" href="/menus">
-    Menu Mapping, Stock Sync, Menu Push, and reading the klikit catalogue.
+    Menu Mapping (POS pre-requisite), Stock Sync, and reading the klikit catalogue.
+  </Card>
+  <Card title="Sandbox" icon="flask" href="/sandbox">
+    Parallel tenant for integration testing — `sbx_*` credentials, synthetic order injection, demo menu.
   </Card>
 </CardGroup>

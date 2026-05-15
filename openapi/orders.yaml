@@ -36,17 +36,18 @@ paths:
       summary: List orders (paginated)
       description: |
         Returns orders for the authenticated partner's business. Use cursor pagination —
-        cursors are opaque and not stable across deploys.
+        cursors are opaque and not stable across deploys. The `(placed_to - placed_from)`
+        window is capped at **90 days**; wider ranges return `400 invalid_range`.
       operationId: listOrders
       parameters:
         - { name: status,        in: query, schema: { $ref: '#/components/schemas/OrderStatusAlias' } }
         - { name: provider_id,   in: query, schema: { type: integer } }
         - { name: brand_id,      in: query, schema: { type: integer } }
         - { name: branch_id,     in: query, schema: { type: integer } }
-        - { name: placed_from,   in: query, schema: { type: string, format: date-time } }
-        - { name: placed_to,     in: query, schema: { type: string, format: date-time } }
+        - { name: placed_from,   in: query, schema: { type: string, format: date-time }, description: "ISO-8601 lower bound (inclusive). (placed_to - placed_from) ≤ 90 days." }
+        - { name: placed_to,     in: query, schema: { type: string, format: date-time }, description: "ISO-8601 upper bound (exclusive). (placed_to - placed_from) ≤ 90 days." }
         - { name: cursor,        in: query, schema: { type: string }, description: Opaque cursor from prior X-Klikit-Next-Cursor }
-        - { name: limit,         in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: limit,         in: query, schema: { type: integer, default: 25, maximum: 100 } }
       responses:
         '200':
           description: Order list
@@ -63,6 +64,8 @@ paths:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/Order' }
+        '400':
+          description: invalid_range — date window > 90 days
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/InsufficientScope' }
 
@@ -228,6 +231,41 @@ webhooks:
       description: |
         Post-hoc correction issued by klikit (e.g. accounting/reconciliation fix).
         Replacement payload, not a delta — reconcile the entire order against this body.
+      requestBody:
+        $ref: '#/components/requestBodies/OrderEventBody'
+      responses:
+        '200': { description: Acknowledged }
+
+  order.courier_assigned:
+    post:
+      tags: [Webhooks]
+      operationId: webhookOrderCourierAssigned
+      summary: Aggregator assigned a courier to a delivery order
+      description: Read-only for partners. Fires only for delivery orders.
+      requestBody:
+        $ref: '#/components/requestBodies/OrderEventBody'
+      responses:
+        '200': { description: Acknowledged }
+
+  order.picked_up:
+    post:
+      tags: [Webhooks]
+      operationId: webhookOrderPickedUp
+      summary: Courier picked up the order
+      description: Read-only for partners. Fires only for delivery orders.
+      requestBody:
+        $ref: '#/components/requestBodies/OrderEventBody'
+      responses:
+        '200': { description: Acknowledged }
+
+  order.delivered:
+    post:
+      tags: [Webhooks]
+      operationId: webhookOrderDelivered
+      summary: Order delivered to customer
+      description: |
+        Terminal event for the delivery flow. Read-only for partners. ERP integrations
+        typically subscribe only to this event as their invoicing trigger.
       requestBody:
         $ref: '#/components/requestBodies/OrderEventBody'
       responses:
@@ -506,7 +544,7 @@ components:
       required: [event_id, event_type, event_version, created_at, business_id, data]
       properties:
         event_id:      { type: string, format: uuid }
-        event_type:    { type: string, enum: [order.placed, order.updated, order.cancelled, order.amended] }
+        event_type:    { type: string, enum: [order.placed, order.updated, order.cancelled, order.amended, order.courier_assigned, order.picked_up, order.delivered] }
         event_version: { type: string, example: "1.0" }
         created_at:    { type: string, format: date-time }
         business_id:   { type: integer }

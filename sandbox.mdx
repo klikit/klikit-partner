@@ -1,0 +1,118 @@
+---
+title: 'Sandbox'
+description: 'Parallel tenant for integration testing — sbx_ credentials, synthetic order injection, demo menu.'
+---
+
+The sandbox is a parallel klikit tenant you integrate against **before** connecting to a live merchant. It runs the full Partner API contract — same OAuth2 flow, same signed webhooks, same OpenAPI spec — against an isolated dataset where no real customer order or merchant menu can be touched.
+
+## TL;DR
+
+- **Why it exists.** You need a place to certify your integration without risking a real merchant's traffic or burning store credit on test orders.
+- **Where it lives.** A separate gateway tenant at `gateway-sandbox.klikit.io`. Same `/v1/partner/*` surface as production. Aggregator middleware is **not** deployed in sandbox — synthetic orders are injected directly, never hitting Grab / Gojek / Shopee accounts.
+- **How you get in.** When klikit Partner Operations issues your production credentials, you receive a paired sandbox credential set with a `sbx_` prefix on the `client_id`. No additional onboarding required.
+- **What you can do.** Fire synthetic orders from canonical fixtures, drive them through the lifecycle, push stock and mapping changes against a demo menu, verify your HMAC implementation against real signed payloads — all isolated.
+
+---
+
+## 1. Credentials
+
+When klikit issues your credentials, you receive **two pairs**: production (`prod_*`) and sandbox (`sbx_*`).
+
+| Field | Production | Sandbox |
+|---|---|---|
+| `client_id` | `prod_<uuid>` | `sbx_<uuid>` |
+| `client_secret` | opaque, captured at issuance | opaque, captured at issuance (distinct from prod) |
+| Token endpoint | `gateway-enterprise.klikit.io/v1/partner/oauth/token` | `gateway-sandbox.klikit.io/v1/partner/oauth/token` |
+| `webhook_url` | your production URL | your sandbox URL (different from prod) |
+| `webhook_secret` | opaque | opaque, distinct from production |
+
+<Warning>
+  Sandbox and production credentials **do not cross**. A `sbx_*` client_id will be rejected by the production gateway with `401 invalid_client`, and vice versa. This is deliberate — it prevents staging endpoints from accidentally receiving production traffic.
+</Warning>
+
+<Note>
+  You can register a different `webhook_url` for sandbox than for production. Most partners do — they point sandbox at their staging environment and production at their production webhook handler.
+</Note>
+
+### Going live
+
+Sandbox credentials are **never** promoted to production. When you're ready to onboard a real merchant, klikit issues a fresh production credential pair. This is intentional friction — it forces an explicit reconfiguration on your side and prevents misrouted webhooks.
+
+---
+
+## 2. Synthetic Order Injection
+
+The headline sandbox feature. Inject an order that flows through klikit exactly as a real aggregator order would — with the same canonical schema, signed webhooks, and lifecycle — without any real aggregator call.
+
+At v1 launch this endpoint is **admin-only**: ask klikit Partner Operations to fire fixtures for you on demand. Partner-callable variant (`sandbox:write` scope) follows in v1.x once the rate-limit and abuse profile is dialled in.
+
+### Fixtures shipped at v1
+
+| Fixture | Shape |
+|---|---|
+| `single_item_dine_in` | One item, no modifiers, dine-in flag |
+| `single_item_delivery` | One item, no modifiers, delivery flag, full courier lifecycle simulated |
+| `multi_item_with_modifiers` | Three items, two with modifier groups, delivery |
+| `large_basket` | 15 items across categories — exercises pagination and payload size |
+| `cancellation_flow` | Fires `order.placed` then `order.cancelled` 30s later — exercises retry / dedup |
+
+### What gets simulated
+
+| Event | Simulated in sandbox? |
+|---|---|
+| `order.placed` | Yes — fires immediately after the fixture is queued |
+| Partner status callbacks (accept, ready, etc.) | Yes — hit sandbox `oni`, fire matching webhooks back |
+| `order.courier_assigned` / `order.picked_up` / `order.delivered` | Simulated on a timer (default +30s / +2m / +8m post-acceptance) |
+| `order.cancelled` | Yes — via fixture or partner-initiated cancel |
+| **Real aggregator status reflection** | **No** — no calls to Grab / Gojek / Shopee from sandbox |
+
+---
+
+## 3. Demo Menu
+
+Each sandbox business is seeded with a canonical demo menu — 3 sections, 8 categories, ~40 items, 4 modifier groups — so you have something to map against on day one.
+
+- You can mutate freely: push Mapping, stock, item-availability against the demo menu without affecting anything real.
+- Need a clean slate? Ask klikit Partner Operations to reset — the demo menu restores to baseline on operator request.
+- **No production menu data is ever copied into sandbox.** Ever.
+
+---
+
+## 4. Webhook Delivery
+
+Sandbox webhooks use the **same HMAC-SHA256 signing, retry, and dead-letter behaviour as production**. The only differences:
+
+- Sandbox delivery logs are retained **7 days** (vs 30 in production).
+- Sandbox traffic is tagged `tenant=sandbox` in logs and dashboards so klikit operators can distinguish it from production when supporting you.
+
+This is intentional: we want HMAC bugs to surface in sandbox so they never reach production.
+
+---
+
+## 5. What Sandbox Does NOT Do
+
+- **It does not simulate aggregator UIs.** No mock GrabFood storefront, no fake courier app. Status transitions are internal-only.
+- **It does not load-test the production gateway.** Sandbox runs on smaller infrastructure; we ask partners to rate-limit themselves accordingly (sandbox token endpoint enforces 60 req/min, fixture firing 30 req/min once the partner-callable variant lands).
+- **It does not import production data.** Even when explicitly requested, klikit only allows this through a written-approval one-off operator copy. By default the answer is no.
+
+---
+
+## 6. Going Live Checklist
+
+When you're ready to graduate from sandbox to your first real merchant:
+
+1. Run all 5 fixtures end-to-end against your handlers — `single_item_dine_in`, `single_item_delivery`, `multi_item_with_modifiers`, `large_basket`, `cancellation_flow`.
+2. Verify HMAC signature rejection on a deliberately-malformed payload.
+3. Confirm dedup on a replayed `event_id` produces a no-op.
+4. Push a Mapping against the demo menu, then a stock update against your own SKU.
+5. Run the partner status callback flow: accept → ready → (auto-completes via courier timer).
+6. Demonstrate webhook retry handling — partner endpoint returns 500 once, then 200 — verify klikit retries on schedule.
+7. Notify klikit Partner Operations; they issue your production credentials and schedule the cutover with the merchant.
+
+---
+
+## See Also
+
+- [Authentication](./authentication) — OAuth2 flow + HMAC verification (same in sandbox)
+- [Orders](./orders) — order schema, lifecycle, courier events
+- [Menus](./menus) — Menu Mapping (POS pre-requisite), Stock Sync, Menu Read

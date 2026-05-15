@@ -7,7 +7,7 @@ Outbound order webhooks (klikit → partner), the partner-side status callback A
 
 ## TL;DR
 
-- **Outbound webhooks** carry every order event you care about: `order.placed`, `order.updated`, `order.cancelled`, `order.amended`.
+- **Outbound webhooks** carry every order event you care about: `order.placed`, `order.updated`, `order.cancelled`, `order.amended`, plus downstream courier-lifecycle events `order.courier_assigned`, `order.picked_up`, `order.delivered` for delivery orders.
 - **Status callbacks** let you advance orders: accept, reject, ready, picked-up, cancel.
 - **One canonical schema** abstracts over every delivery provider klikit integrates with — provider attribution is always explicit.
 - **Read-only queries** are available if you prefer polling over subscribing (ERP/accounting use cases).
@@ -91,7 +91,7 @@ Subscribed events are delivered to your registered `webhook_url` (see [Authentic
 | Field | Notes |
 |---|---|
 | `event_id` | Stable UUID. Dedupe by this. |
-| `event_type` | One of `order.placed`, `order.updated`, `order.cancelled`, `order.amended` |
+| `event_type` | One of `order.placed`, `order.updated`, `order.cancelled`, `order.amended`, `order.courier_assigned`, `order.picked_up`, `order.delivered` |
 | `event_version` | Schema version. Major bumps will fire alongside old version during deprecation window. |
 | `created_at` | When klikit emitted the event (not when the order was placed). |
 | `business_id` | The klikit business this event belongs to — useful when one partner serves multiple businesses. |
@@ -108,8 +108,15 @@ Subscribed events are delivered to your registered `webhook_url` (see [Authentic
 | `order.updated` | Order details change (customer note, delivery instructions, address — *not* status) | At-least-once |
 | `order.cancelled` | Status moves to `cancelled` from any state, by any party | At-least-once |
 | `order.amended` | Post-hoc correction — see §5 | Rarely; manual operator action |
+| `order.courier_assigned` | Aggregator assigns a courier to a delivery order — read-only for partner | At-least-once |
+| `order.picked_up` | Courier picks up the order from the store — read-only for partner | At-least-once |
+| `order.delivered` | Order successfully delivered to customer — terminal for delivery flow, read-only for partner | At-least-once |
 
-**Note:** `order.placed` is fired **once** when the order first becomes visible. Subsequent status transitions (accept, ready, etc.) are not separate webhooks for v1 — you are the source of those transitions via the status callback API. If the **aggregator** drives a status change (e.g. customer cancels via the provider's app), an `order.cancelled` event fires.
+**Note:** `order.placed` is fired **once** when the order first becomes visible. Status transitions you drive yourself (accept, ready, etc.) are not separate webhooks — you are the source of those via the status callback API. If the **aggregator** drives a status change (customer cancels via the provider's app, courier picks up an order, etc.), the corresponding event fires.
+
+<Tip>
+  Courier-lifecycle events are read-only — you cannot drive them. They reflect the upstream aggregator's view of the delivery and let you complete the audit trail for ERP / invoicing flows. ERP partners typically subscribe **only** to `order.delivered` (their invoicing trigger).
+</Tip>
 
 ---
 
@@ -337,7 +344,11 @@ GET /v1/partner/orders?status=delivered&placed_from=2026-04-27T00:00:00Z&placed_
 | `provider_id` | Filter by provider |
 | `branch_id` / `brand_id` | Scope to a branch/brand |
 | `cursor` | Opaque pagination cursor from previous response |
-| `limit` | Default 50, max 200 |
+| `limit` | Default 25, max 100 |
+
+<Warning>
+  The `(placed_to - placed_from)` window is capped at **90 days**. Wider ranges return `400 invalid_range`. For reconciliation jobs that need historical data beyond 90 days, page through multiple windows.
+</Warning>
 
 Response is a paginated list of order objects. Use the `X-Klikit-Next-Cursor` header for pagination.
 

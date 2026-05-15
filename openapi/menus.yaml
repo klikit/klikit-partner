@@ -53,34 +53,9 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/InsufficientScope' }
 
-    post:
-      tags: [Menu Push]
-      summary: Push a complete menu (async)
-      description: |
-        Submits a partner-owned menu to klikit. Returns a `job_id` immediately;
-        validation, persistence, and aggregator sync happen asynchronously.
-        Poll `GET /v1/partner/menus/jobs/{job_id}` or subscribe to `menu.job.completed`.
-      operationId: pushMenu
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/MenuPushRequest' }
-      responses:
-        '202':
-          description: Accepted — job created
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/MenuJob' }
-        '400':
-          description: Validation error (synchronous, before job creation)
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-        '401': { $ref: '#/components/responses/Unauthenticated' }
-        '403': { $ref: '#/components/responses/InsufficientScope' }
+  # Menu Push (POST /v1/partner/menus) — deferred to v1.x. POS / ERP / inventory
+  # partners operate against klikit's canonical menu via Mapping + Stock. Menu
+  # Push lands once a white-label partner is signed.
 
   /v1/partner/menus/items:
     get:
@@ -326,47 +301,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/BulkStockUpdateResponse' }
 
-  /v1/partner/menus/jobs/{job_id}:
-    get:
-      tags: [Menu Push]
-      summary: Get menu push/publish job status
-      operationId: getMenuJob
-      parameters:
-        - { name: job_id, in: path, required: true, schema: { type: string } }
-      responses:
-        '200':
-          description: Job
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/MenuJob' }
-        '404': { $ref: '#/components/responses/NotFound' }
-
-  /v1/partner/menus/publish:
-    post:
-      tags: [Menu Push]
-      summary: Publish current menu draft to aggregators
-      operationId: publishMenu
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [branch_id]
-              properties:
-                branch_id:    { type: integer }
-                provider_ids:
-                  type: array
-                  items: { type: integer }
-                  description: Empty/omitted = all configured providers for the branch
-      responses:
-        '202':
-          description: Publish job created
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/MenuJob' }
+  # Menu Push job tracking (GET /v1/partner/menus/jobs/{job_id}) and publish
+  # (POST /v1/partner/menus/publish) — deferred to v1.x alongside POST /v1/partner/menus.
 
 components:
   securitySchemes:
