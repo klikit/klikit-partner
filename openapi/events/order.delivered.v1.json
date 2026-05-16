@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://klikit.io/partner-api/events/order.delivered.v1.json",
+  "title": "order.delivered.v1",
+  "description": "Fires when a delivery order is confirmed delivered. data.status is 'delivered' (terminal). ERP partners commonly trigger invoicing on this event. data.totals.aggregator_commission is populated when the originating platform supplies it, null otherwise.",
+  "allOf": [{ "$ref": "_order.schema.json#/$defs/PartnerEventEnvelope" }],
+  "properties": {
+    "event_type": { "const": "order.delivered.v1" }
+  },
+  "examples": [
+    {
+      "event_id": "4f506172-8c9d-4ea0-b2f3-14c5d6e7f8a9",
+      "event_type": "order.delivered.v1",
+      "event_version": "1.0",
+      "created_at": "2026-05-15T10:52:03Z",
+      "business_id": 42,
+      "data": {
+        "id": "ord_01HX7K4J4M9V2P0Q5T8Z3W6Y1B",
+        "short_id": "K7X9M2",
+        "external_id": "GF-20260515-12345",
+        "business_id": 42,
+        "brand_id": 10,
+        "branch_id": 100,
+        "provider": { "id": 6, "name": "grabfood", "display_name": "GrabFood" },
+        "channel": "marketplace",
+        "status": "delivered",
+        "status_code": 5,
+        "status_history": [
+          { "status": "placed", "at": "2026-05-15T10:14:20Z", "by": "system" },
+          { "status": "accepted", "at": "2026-05-15T10:15:40Z", "by": "partner" },
+          { "status": "ready", "at": "2026-05-15T10:28:00Z", "by": "partner" },
+          { "status": "delivered", "at": "2026-05-15T10:52:00Z", "by": "aggregator" }
+        ],
+        "order_type": "delivery",
+        "placed_at": "2026-05-15T10:14:20Z",
+        "scheduled_for": null,
+        "customer": { "name": "Aiko Tanaka", "phone": "+66800000000", "email": null },
+        "items": [
+          {
+            "klikit_item_id": 12345,
+            "name": "Classic Cheeseburger",
+            "quantity": 2,
+            "unit_price": 199.00,
+            "subtotal": 398.00,
+            "modifiers": []
+          }
+        ],
+        "totals": {
+          "currency": "THB",
+          "subtotal": 398.00,
+          "delivery_fee": 25.00,
+          "service_fee": 10.00,
+          "vat_amount": 30.66,
+          "merchant_total": 463.00,
+          "customer_total": 463.00,
+          "aggregator_commission": 92.60
+        },
+        "payment": { "method": "card", "status": "paid", "is_prepaid": true },
+        "fulfilment": {
+          "mode": "rider_delivery",
+          "rider": { "status": "completed", "name": "Somchai P.", "phone": "+66811111111", "vehicle": "Honda Wave - 1กก 1234" },
+          "pickup_at": "2026-05-15T10:34:48Z",
+          "delivered_at": "2026-05-15T10:52:00Z"
+        },
+        "created_at": "2026-05-15T10:14:20Z",
+        "updated_at": "2026-05-15T10:52:03Z"
+      }
+    }
+  ]
+}

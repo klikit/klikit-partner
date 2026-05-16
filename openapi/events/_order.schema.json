@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://klikit.io/partner-api/events/_order.schema.json",
+  "title": "Shared partner event definitions",
+  "description": "Shared $defs for klikit partner order events. Kept consistent with the Order schema in ../orders.yaml. Referenced by the order.*.v1.json event schemas.",
+  "$defs": {
+    "PartnerEventEnvelope": {
+      "type": "object",
+      "description": "Common webhook envelope for every order.*.v1 partner event.",
+      "additionalProperties": false,
+      "required": ["event_id", "event_type", "event_version", "created_at", "business_id", "data"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Stable UUID, identical across retries. Deduplicate on this."
+        },
+        "event_type": {
+          "type": "string",
+          "description": "Versioned event type, e.g. order.placed.v1. Overridden to a const in each event schema."
+        },
+        "event_version": {
+          "type": "string",
+          "description": "Human schema version string. The authoritative version is the .vN in event_type.",
+          "examples": ["1.0"]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When klikit emitted the event (not when the order was placed)."
+        },
+        "business_id": {
+          "type": "integer",
+          "description": "The klikit business this event belongs to."
+        },
+        "data": { "$ref": "#/$defs/Order" }
+      }
+    },
+
+    "OrderStatusAlias": {
+      "type": "string",
+      "enum": ["placed", "accepted", "cancelled", "ready", "delivered", "picked_up"]
+    },
+
+    "Order": {
+      "type": "object",
+      "description": "Canonical klikit order. Mirrors the Order schema in ../orders.yaml.",
+      "required": [
+        "id", "short_id", "business_id", "brand_id", "branch_id", "provider",
+        "channel", "status", "status_code", "order_type", "placed_at",
+        "customer", "items", "totals", "payment", "fulfilment",
+        "created_at", "updated_at"
+      ],
+      "properties": {
+        "id": { "type": "string", "description": "klikit-issued opaque order id." },
+        "short_id": { "type": "string", "description": "Human-friendly id surfaced on receipts." },
+        "external_id": { "type": ["string", "null"], "description": "Provider-side id." },
+        "business_id": { "type": "integer" },
+        "brand_id": { "type": "integer" },
+        "branch_id": { "type": "integer" },
+        "provider": { "$ref": "#/$defs/Provider" },
+        "channel": { "type": "string", "enum": ["marketplace", "webshop", "dine_in", "scan_to_order"] },
+        "status": { "$ref": "#/$defs/OrderStatusAlias" },
+        "status_code": { "type": "integer", "description": "1=placed, 2=accepted, 3=cancelled, 4=ready, 5=delivered, 9=picked_up." },
+        "status_history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["status", "at", "by"],
+            "properties": {
+              "status": { "$ref": "#/$defs/OrderStatusAlias" },
+              "at": { "type": "string", "format": "date-time" },
+              "by": { "type": "string", "enum": ["system", "partner", "aggregator", "customer", "operator"] },
+              "reason_code": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "order_type": { "type": "string", "enum": ["pickup", "delivery", "dine_in", "scan_to_order"] },
+        "placed_at": { "type": "string", "format": "date-time" },
+        "scheduled_for": { "type": ["string", "null"], "format": "date-time" },
+        "customer": { "$ref": "#/$defs/Customer" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/OrderItem" } },
+        "totals": { "$ref": "#/$defs/OrderTotals" },
+        "payment": { "$ref": "#/$defs/Payment" },
+        "fulfilment": { "$ref": "#/$defs/Fulfilment" },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "cutlery": { "type": ["boolean", "null"] },
+            "tax_id": { "type": ["string", "null"] },
+            "is_dine_in_table": { "type": ["string", "null"] },
+            "provider_metadata": { "type": "object" }
+          }
+        },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "Provider": {
+      "type": "object",
+      "required": ["id", "name", "display_name"],
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "display_name": { "type": "string" }
+      }
+    },
+
+    "Customer": {
+      "type": "object",
+      "required": ["name", "phone"],
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": ["string", "null"], "format": "email" },
+        "address": {
+          "type": ["object", "null"],
+          "required": ["line1", "country"],
+          "properties": {
+            "line1": { "type": "string" },
+            "line2": { "type": ["string", "null"] },
+            "city": { "type": "string" },
+            "postcode": { "type": ["string", "null"] },
+            "country": { "type": "string", "description": "ISO-3166-1 alpha-2." },
+            "latitude": { "type": ["number", "null"] },
+            "longitude": { "type": ["number", "null"] },
+            "instructions": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+
+    "OrderItem": {
+      "type": "object",
+      "required": ["klikit_item_id", "name", "quantity", "unit_price", "subtotal"],
+      "properties": {
+        "klikit_item_id": { "type": "integer" },
+        "partner_item_id": { "type": ["string", "null"], "description": "Populated only if a mapping is registered." },
+        "sku": { "type": ["string", "null"] },
+        "name": { "type": "string" },
+        "quantity": { "type": "integer", "minimum": 1 },
+        "unit_price": { "type": "number" },
+        "subtotal": { "type": "number" },
+        "modifiers": { "type": "array", "items": { "$ref": "#/$defs/OrderModifier" } },
+        "special_instructions": { "type": ["string", "null"] },
+        "vat_amount": { "type": ["number", "null"] }
+      }
+    },
+
+    "OrderModifier": {
+      "type": "object",
+      "required": ["klikit_modifier_id", "name", "unit_price", "quantity", "subtotal"],
+      "properties": {
+        "klikit_modifier_id": { "type": "integer" },
+        "partner_modifier_id": { "type": ["string", "null"] },
+        "group_name": { "type": ["string", "null"] },
+        "name": { "type": "string" },
+        "unit_price": { "type": "number" },
+        "quantity": { "type": "integer", "minimum": 1 },
+        "subtotal": { "type": "number" }
+      }
+    },
+
+    "OrderTotals": {
+      "type": "object",
+      "required": ["currency", "subtotal", "merchant_total", "customer_total"],
+      "properties": {
+        "currency": { "type": "string", "description": "ISO-4217." },
+        "currency_symbol": { "type": ["string", "null"] },
+        "subtotal": { "type": "number" },
+        "discount_amount": { "type": "number" },
+        "delivery_fee": { "type": "number" },
+        "service_fee": { "type": "number" },
+        "additional_fee": { "type": "number" },
+        "vat_amount": { "type": "number" },
+        "merchant_total": { "type": "number" },
+        "customer_total": { "type": "number" },
+        "aggregator_commission": {
+          "type": ["number", "null"],
+          "description": "Aggregator commission for this order, in the order currency. Populated on order.delivered.v1 when the platform supplies it; null otherwise."
+        }
+      }
+    },
+
+    "Payment": {
+      "type": "object",
+      "required": ["method", "status", "is_prepaid"],
+      "properties": {
+        "method": { "type": "string", "enum": ["cash", "card", "wallet", "invoice"] },
+        "channel_id": { "type": ["integer", "null"] },
+        "status": { "type": "string", "enum": ["paid", "pending", "failed", "refunded"] },
+        "is_prepaid": { "type": "boolean" }
+      }
+    },
+
+    "Fulfilment": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["self_pickup", "rider_delivery", "dine_in"] },
+        "rider": {
+          "type": ["object", "null"],
+          "properties": {
+            "status": { "type": "string", "enum": ["searching", "assigned", "arrived", "en_route", "completed", "failed"] },
+            "name": { "type": ["string", "null"] },
+            "phone": { "type": ["string", "null"] },
+            "vehicle": { "type": ["string", "null"] }
+          }
+        },
+        "pickup_at": { "type": ["string", "null"], "format": "date-time" },
+        "delivered_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}
