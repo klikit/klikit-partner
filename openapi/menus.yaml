@@ -3,30 +3,36 @@ info:
   title: klikit Partner API — Menus
   version: 1.0.0
   description: |
-    Menu Mapping (POS-critical), Stock Sync, and Menu Push.
+    Menu Read (canonical klikit menu), Menu Mapping (POS-critical), and
+    OOS / Stock Sync.
 
-    See [Menus](../menus.md) for the prose contract.
+    **Menu Push is deferred to v1.x (D1, 2026-05-15)** and is not part of this
+    v1 contract — the `menus:write` scope, the async menu push endpoints, and
+    the job-tracking model are out of scope until a white-label partner is
+    signed. The original Menu Push spec is preserved in
+    [`03-menus.md`](../03-menus.md) for v1.x scoping.
+
+    See [03-menus.md](../03-menus.md) for the prose contract and
+    [CONTRACT.md](../CONTRACT.md) for the frozen reference.
   contact:
     name: klikit Partner Integrations
-    email: TBD-partner-contact@klikit.io
+    email: partners@klikit.io
   license:
     name: Proprietary — klikit Partner Integration Terms
-    url: https://TBD-legal-url.example.com/partner-terms
+    url: https://klikit.io/legal/partner-terms
 servers:
-  - url: https://TBD-production-host.example.com
+  - url: https://gateway-enterprise.klikit.io
     description: Production
-  - url: https://TBD-sandbox-host.example.com
+  - url: https://gateway-sandbox.klikit.io
     description: Sandbox
 
 tags:
   - name: Menu Read
-    description: Discover klikit's canonical menu
+    description: Discover klikit's canonical menu (scope `menus:read`)
   - name: Mapping
-    description: Map partner IDs ↔ klikit IDs
+    description: Map partner IDs ↔ klikit IDs (scope `mapping:write`)
   - name: Stock
-    description: OOS / availability / stock quantity
-  - name: Menu Push
-    description: Push partner-owned master menu into klikit
+    description: OOS / availability / stock quantity (scope `stock:write`)
 
 security:
   - bearerAuth: []
@@ -35,7 +41,11 @@ paths:
   /v1/partner/menus:
     get:
       tags: [Menu Read]
-      summary: Get full menu tree for a store
+      summary: Get the full menu tree for a store
+      description: |
+        Returns the 4-level menu tree (Section → Category → Item → Modifier
+        Group → Modifier) for the given branch/brand. Scoped to the
+        credential's `business_id`. Requires the `menus:read` scope.
       operationId: getMenuTree
       parameters:
         - { name: branch_id, in: query, required: true, schema: { type: integer } }
@@ -50,22 +60,22 @@ paths:
                 required: [data]
                 properties:
                   data: { $ref: '#/components/schemas/MenuTree' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/InsufficientScope' }
-
-  # Menu Push (POST /v1/partner/menus) — deferred to v1.x. POS / ERP / inventory
-  # partners operate against klikit's canonical menu via Mapping + Stock. Menu
-  # Push lands once a white-label partner is signed.
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/items:
     get:
       tags: [Menu Read]
       summary: Paginated flat list of items
+      description: Requires the `menus:read` scope.
       operationId: listMenuItems
       parameters:
         - { name: branch_id, in: query, required: true, schema: { type: integer } }
-        - { name: page,      in: query, schema: { type: integer, default: 1 } }
-        - { name: limit,     in: query, schema: { type: integer, default: 100, maximum: 500 } }
+        - { name: page,      in: query, schema: { type: integer, default: 1, minimum: 1 } }
+        - { name: limit,     in: query, schema: { type: integer, default: 100, minimum: 1, maximum: 500 } }
       responses:
         '200':
           description: Items
@@ -80,16 +90,22 @@ paths:
                     items: { $ref: '#/components/schemas/MenuItem' }
                   pagination:
                     type: object
+                    required: [page, limit, total_items, total_pages]
                     properties:
                       page:        { type: integer }
                       limit:       { type: integer }
                       total_items: { type: integer }
                       total_pages: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/items/{klikit_item_id}:
     get:
       tags: [Menu Read]
       summary: Get item detail (with modifier groups)
+      description: Requires the `menus:read` scope.
       operationId: getMenuItem
       parameters:
         - { name: klikit_item_id, in: path, required: true, schema: { type: integer } }
@@ -103,11 +119,16 @@ paths:
                 required: [data]
                 properties:
                   data: { $ref: '#/components/schemas/MenuItem' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/items/{klikit_item_id}/stock:
     get:
       tags: [Stock]
       summary: Current stock state per provider
+      description: Requires the `stock:write` scope (stock read is bundled into the stock capability).
       operationId: getItemStock
       parameters:
         - { name: klikit_item_id, in: path, required: true, schema: { type: integer } }
@@ -118,11 +139,19 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ItemStockState' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/mappings/lookup:
     post:
       tags: [Mapping]
       summary: Bulk lookup klikit IDs by partner IDs
+      description: |
+        Resolves partner SKUs to klikit node IDs in bulk. Unmapped partner_ids
+        return `null` in the result map. Requires the `mapping:write` scope.
       operationId: lookupMappings
       requestBody:
         required: true
@@ -138,10 +167,11 @@ paths:
                 partner_ids:
                   type: array
                   items: { type: string }
+                  minItems: 1
                   maxItems: 500
       responses:
         '200':
-          description: Lookup result. Unmapped partner_ids return null.
+          description: Lookup result. Unmapped partner_ids map to null.
           content:
             application/json:
               schema:
@@ -154,11 +184,17 @@ paths:
                       oneOf:
                         - $ref: '#/components/schemas/MappingHit'
                         - type: "null"
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/items/mappings:
     post:
       tags: [Mapping]
       summary: Bulk upsert item mappings
+      description: |
+        Idempotency-Key required. Requires the `mapping:write` scope.
       operationId: upsertItemMappings
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -169,13 +205,19 @@ paths:
             schema: { $ref: '#/components/schemas/MappingUpsertRequest' }
       responses:
         '200':
-          description: Result
+          description: Per-row result
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MappingUpsertResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
     delete:
       tags: [Mapping]
       summary: Bulk delete item mappings
+      description: Requires the `mapping:write` scope.
       operationId: deleteItemMappings
       requestBody:
         required: true
@@ -188,6 +230,7 @@ paths:
                 klikit_ids:
                   type: array
                   items: { type: integer }
+                  minItems: 1
       responses:
         '200':
           description: Deleted
@@ -195,13 +238,19 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [deleted]
                 properties:
                   deleted: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/categories/mappings:
     post:
       tags: [Mapping]
       summary: Bulk upsert category mappings
+      description: Idempotency-Key required. Requires the `mapping:write` scope.
       operationId: upsertCategoryMappings
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -212,15 +261,23 @@ paths:
             schema: { $ref: '#/components/schemas/MappingUpsertRequest' }
       responses:
         '200':
-          description: Result
+          description: Per-row result
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MappingUpsertResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/modifier-groups/mappings:
     post:
       tags: [Mapping]
       summary: Bulk upsert modifier group mappings
+      description: |
+        Idempotency-Key required. Modifiers inherit their mapping from the
+        group. Requires the `mapping:write` scope.
       operationId: upsertModifierGroupMappings
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -231,18 +288,71 @@ paths:
             schema: { $ref: '#/components/schemas/MappingUpsertRequest' }
       responses:
         '200':
-          description: Result
+          description: Per-row result
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MappingUpsertResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/partner/menus/items/{partner_item_id}/availability:
+    patch:
+      tags: [Stock]
+      summary: Enable or disable an item by partner SKU
+      description: |
+        Toggles item availability without changing stock counts. Operates
+        across all aggregators (per-aggregator override is deferred to v1.1).
+        Resolves `partner_item_id` via a registered mapping — returns
+        `404 unmapped` if none exists. Requires the `stock:write` scope.
+      operationId: setItemAvailability
+      parameters:
+        - { name: partner_item_id, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch_id, available]
+              properties:
+                branch_id: { type: integer }
+                available: { type: boolean }
+            examples:
+              disable:
+                value: { branch_id: 100, available: false }
+              enable:
+                value: { branch_id: 100, available: true }
+      responses:
+        '200':
+          description: Availability updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockUpdateResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '404': { $ref: '#/components/responses/Unmapped' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/stock/{partner_item_id}:
     patch:
       tags: [Stock]
-      summary: Update OOS / availability / stock for one item
+      summary: Update OOS / stock count for one item by partner SKU
       description: |
-        Resolves `partner_item_id` via mapping registered for this credential.
-        Returns 404 if no mapping exists.
+        Resolves `partner_item_id` via a mapping registered for this
+        credential — returns `404 unmapped` if none exists.
+
+        Stock can be expressed as a count (`stock_quantity`), an explicit
+        enable/disable flag (`is_enabled`), or a timed snooze
+        (`snooze_duration_seconds`). When `stock_quantity` reaches 0, klikit
+        fires OOS propagation to every configured aggregator.
+
+        Requires the `stock:write` scope.
       operationId: updateItemStock
       parameters:
         - { name: partner_item_id, in: path, required: true, schema: { type: string } }
@@ -271,21 +381,21 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StockUpdateResponse' }
-        '404':
-          description: No mapping registered for this partner_item_id
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-        '422':
-          description: Conflicting fields (e.g. snooze_duration_seconds AND snooze_until_turn_back)
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '404': { $ref: '#/components/responses/Unmapped' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/menus/stock/bulk:
     patch:
       tags: [Stock]
-      summary: Bulk OOS / availability / stock update
+      summary: Bulk OOS / stock update by partner SKU
+      description: |
+        Each row resolves its `partner_item_id` independently; unmapped rows
+        fail in the per-row results without failing the request. Requires the
+        `stock:write` scope.
       operationId: bulkUpdateItemStock
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -300,9 +410,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BulkStockUpdateResponse' }
-
-  # Menu Push job tracking (GET /v1/partner/menus/jobs/{job_id}) and publish
-  # (POST /v1/partner/menus/publish) — deferred to v1.x alongside POST /v1/partner/menus.
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
 components:
   securitySchemes:
@@ -315,25 +427,71 @@ components:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      required: false
+      required: true
       schema: { type: string, format: uuid }
+      description: |
+        Replay-safe key chosen by the partner (UUID v4). klikit caches the
+        response for 24h. Required on every write.
 
   responses:
+    ValidationError:
+      description: Invalid input (`validation_error`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: validation_error, message: "branch_id is required." }
     Unauthenticated:
-      description: Missing or invalid token
+      description: Missing, expired, or invalid token (`unauthenticated`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: unauthenticated, message: "Missing or invalid access token." }
     InsufficientScope:
-      description: Token lacks required scope
+      description: Token lacks the scope required for this endpoint (`insufficient_scope`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: insufficient_scope, message: "Token does not grant 'stock:write'." }
     NotFound:
-      description: Not found
+      description: Resource not found, or not owned by this credential's business (`not_found`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: not_found, message: "No item with that id for this business." }
+    Unmapped:
+      description: No mapping registered for this partner_item_id (`unmapped`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: unmapped, message: "No mapping registered for partner SKU 'POS-SKU-998'." }
+    IdempotencyConflict:
+      description: Idempotency-Key reused with a different request body (`idempotency_conflict`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: idempotency_conflict, message: "Idempotency-Key already used with a different request body." }
+    RateLimited:
+      description: Rate limit exceeded (`rate_limit_exceeded`)
+      headers:
+        Retry-After:
+          schema: { type: integer }
+        X-RateLimit-Limit:
+          schema: { type: integer }
+        X-RateLimit-Remaining:
+          schema: { type: integer }
+        X-RateLimit-Reset:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: rate_limit_exceeded, message: "Too many requests." }
 
   schemas:
     LangMap:
@@ -458,15 +616,16 @@ components:
         branch_id: { type: integer }
         mappings:
           type: array
+          minItems: 1
           maxItems: 500
           items:
             type: object
             required: [klikit_id, partner_id]
             properties:
-              klikit_id:    { type: integer }
-              partner_id:   { type: string }
-              partner_sku:  { type: [string, "null"] }
-              partner_name: { type: [string, "null"] }
+              klikit_id:    { type: integer, description: "klikit node id (item / category / modifier-group)" }
+              partner_id:   { type: string, description: "The partner's own SKU / identifier for this node" }
+              partner_sku:  { type: [string, "null"], description: "Optional display SKU" }
+              partner_name: { type: [string, "null"], description: "Optional display name" }
 
     MappingUpsertResponse:
       type: object
@@ -478,6 +637,7 @@ components:
           type: array
           items:
             type: object
+            required: [code, message]
             properties:
               klikit_id:  { type: [integer, "null"] }
               partner_id: { type: [string, "null"] }
@@ -486,13 +646,17 @@ components:
 
     StockUpdateRequest:
       type: object
+      description: |
+        At least one of `is_enabled`, `stock_quantity`, or
+        `snooze_duration_seconds` must be set. `snooze_duration_seconds` and
+        `snooze_until_turn_back` are mutually exclusive.
       required: [branch_id]
       properties:
         branch_id:                { type: integer }
-        is_enabled:               { type: [boolean, "null"] }
-        stock_quantity:           { type: [integer, "null"], minimum: 0 }
-        snooze_duration_seconds:  { type: [integer, "null"], minimum: 1 }
-        snooze_until_turn_back:   { type: [boolean, "null"] }
+        is_enabled:               { type: [boolean, "null"], description: "Hard enable/disable. False = disabled until re-enabled." }
+        stock_quantity:           { type: [integer, "null"], minimum: 0, description: "Remaining count. 0 triggers OOS propagation to aggregators." }
+        snooze_duration_seconds:  { type: [integer, "null"], minimum: 1, description: "Timed soft-OOS — item auto-restocks after this many seconds." }
+        snooze_until_turn_back:   { type: [boolean, "null"], description: "Soft-OOS until the next service window turn-back." }
 
     StockUpdateResponse:
       type: object
@@ -514,6 +678,7 @@ components:
         branch_id: { type: integer }
         updates:
           type: array
+          minItems: 1
           maxItems: 500
           items:
             allOf:
@@ -537,7 +702,7 @@ components:
             properties:
               partner_item_id: { type: string }
               ok:              { type: boolean }
-              code:            { type: [string, "null"] }
+              code:            { type: [string, "null"], description: "Error code when ok=false (e.g. unmapped)." }
               message:         { type: [string, "null"] }
 
     ItemStockState:
@@ -564,126 +729,9 @@ components:
               status:      { type: string, enum: [synced, pending, failed, unsupported] }
               synced_at:   { type: [string, "null"], format: date-time }
 
-    MenuPushRequest:
-      type: object
-      required: [branch_id, currency]
-      description: |
-        Either `sections` OR `items` must be provided. Use `items` for flat shapes —
-        klikit will synthesise a default section/category.
-      properties:
-        branch_id: { type: integer }
-        brand_id:  { type: integer }
-        currency:  { type: string, description: ISO-4217 }
-        sections:
-          type: array
-          items: { $ref: '#/components/schemas/MenuPushSection' }
-        items:
-          type: array
-          description: Flat alternative when partner has no section/category concept
-          items: { $ref: '#/components/schemas/MenuPushItem' }
-
-    MenuPushSection:
-      type: object
-      required: [partner_section_id, title, categories]
-      properties:
-        partner_section_id: { type: string }
-        title:              { $ref: '#/components/schemas/LangMap' }
-        available_times:
-          type: array
-          items: { $ref: '#/components/schemas/AvailableTime' }
-        categories:
-          type: array
-          items: { $ref: '#/components/schemas/MenuPushCategory' }
-
-    MenuPushCategory:
-      type: object
-      required: [partner_category_id, title, items]
-      properties:
-        partner_category_id: { type: string }
-        title:               { $ref: '#/components/schemas/LangMap' }
-        items:
-          type: array
-          items: { $ref: '#/components/schemas/MenuPushItem' }
-
-    MenuPushItem:
-      type: object
-      required: [partner_item_id, title, prices, is_enabled]
-      properties:
-        partner_item_id: { type: string }
-        sku:             { type: [string, "null"] }
-        title:           { $ref: '#/components/schemas/LangMap' }
-        description:     { $ref: '#/components/schemas/LangMap' }
-        image_url:       { type: [string, "null"], format: uri }
-        prices:          { $ref: '#/components/schemas/Prices' }
-        vat_rate:        { type: [number, "null"] }
-        is_enabled:      { type: boolean }
-        modifier_groups:
-          type: array
-          items: { $ref: '#/components/schemas/MenuPushModifierGroup' }
-
-    MenuPushModifierGroup:
-      type: object
-      required: [partner_modifier_group_id, title, modifiers]
-      properties:
-        partner_modifier_group_id: { type: string }
-        title:                     { $ref: '#/components/schemas/LangMap' }
-        min_select:                { type: integer, default: 0 }
-        max_select:                { type: integer, default: 1 }
-        modifiers:
-          type: array
-          items: { $ref: '#/components/schemas/MenuPushModifier' }
-
-    MenuPushModifier:
-      type: object
-      required: [partner_modifier_id, title, price, is_enabled]
-      properties:
-        partner_modifier_id: { type: string }
-        title:               { $ref: '#/components/schemas/LangMap' }
-        price:               { type: number }
-        is_enabled:          { type: boolean }
-
-    MenuJob:
-      type: object
-      required: [job_id, status, submitted_at]
-      properties:
-        job_id:       { type: string }
-        status:       { type: string, enum: [pending, in_progress, completed, partial_success, failed] }
-        submitted_at: { type: string, format: date-time }
-        started_at:   { type: [string, "null"], format: date-time }
-        completed_at: { type: [string, "null"], format: date-time }
-        progress:
-          type: object
-          properties:
-            stages:
-              type: array
-              items:
-                type: object
-                required: [name, status]
-                properties:
-                  name:        { type: string, enum: [validation, klikit_persistence, aggregator_sync] }
-                  status:      { type: string, enum: [pending, in_progress, completed, failed, skipped] }
-                  duration_ms: { type: [integer, "null"] }
-                  providers:
-                    type: array
-                    items:
-                      type: object
-                      required: [provider_id, name, status]
-                      properties:
-                        provider_id: { type: integer }
-                        name:        { type: string }
-                        status:      { type: string, enum: [pending, in_progress, completed, failed] }
-                        error:       { type: [string, "null"] }
-        errors:
-          type: array
-          items:
-            type: object
-            properties:
-              code:    { type: string }
-              message: { type: string }
-              path:    { type: [string, "null"], description: "JSON pointer into the submitted payload" }
-
     Error:
       type: object
+      description: Canonical error envelope for all non-OAuth partner endpoints.
       required: [error]
       properties:
         error:

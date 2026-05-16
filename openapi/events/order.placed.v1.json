@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://klikit.io/partner-api/events/order.placed.v1.json",
+  "title": "order.placed.v1",
+  "description": "Fires once when a new order arrives in klikit, from any channel. The richest order payload. Verify the X-Klikit-Signature HMAC before trusting the body.",
+  "allOf": [{ "$ref": "_order.schema.json#/$defs/PartnerEventEnvelope" }],
+  "properties": {
+    "event_type": { "const": "order.placed.v1" }
+  },
+  "examples": [
+    {
+      "event_id": "6f1a8e2c-0b3d-4f5a-9c7e-1d2b3a4c5d6e",
+      "event_type": "order.placed.v1",
+      "event_version": "1.0",
+      "created_at": "2026-05-15T10:14:23Z",
+      "business_id": 42,
+      "data": {
+        "id": "ord_01HX7K4J4M9V2P0Q5T8Z3W6Y1B",
+        "short_id": "K7X9M2",
+        "external_id": "GF-20260515-12345",
+        "business_id": 42,
+        "brand_id": 10,
+        "branch_id": 100,
+        "provider": { "id": 6, "name": "grabfood", "display_name": "GrabFood" },
+        "channel": "marketplace",
+        "status": "placed",
+        "status_code": 1,
+        "status_history": [
+          { "status": "placed", "at": "2026-05-15T10:14:20Z", "by": "system" }
+        ],
+        "order_type": "delivery",
+        "placed_at": "2026-05-15T10:14:20Z",
+        "scheduled_for": null,
+        "customer": { "name": "Aiko Tanaka", "phone": "+66800000000", "email": null },
+        "items": [
+          {
+            "klikit_item_id": 12345,
+            "partner_item_id": "POS-SKU-998",
+            "sku": "BURGER-CLASSIC",
+            "name": "Classic Cheeseburger",
+            "quantity": 2,
+            "unit_price": 199.00,
+            "subtotal": 398.00,
+            "modifiers": []
+          }
+        ],
+        "totals": {
+          "currency": "THB",
+          "subtotal": 398.00,
+          "delivery_fee": 25.00,
+          "service_fee": 10.00,
+          "vat_amount": 30.66,
+          "merchant_total": 463.00,
+          "customer_total": 463.00,
+          "aggregator_commission": null
+        },
+        "payment": { "method": "card", "status": "paid", "is_prepaid": true },
+        "fulfilment": { "mode": "rider_delivery", "rider": { "status": "searching" } },
+        "created_at": "2026-05-15T10:14:20Z",
+        "updated_at": "2026-05-15T10:14:23Z"
+      }
+    }
+  ]
+}

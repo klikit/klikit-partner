@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://klikit.io/partner-api/events/order.amended.v1.json",
+  "title": "order.amended.v1",
+  "description": "Fires on an operator-driven post-hoc correction to an order. The data payload is the full corrected order — partners reconcile their local copy entirely against it, not as a delta.",
+  "allOf": [{ "$ref": "_order.schema.json#/$defs/PartnerEventEnvelope" }],
+  "properties": {
+    "event_type": { "const": "order.amended.v1" }
+  },
+  "examples": [
+    {
+      "event_id": "7e8f9a0b-1c2d-4e3f-8051-6a7b8c9d0e1f",
+      "event_type": "order.amended.v1",
+      "event_version": "1.0",
+      "created_at": "2026-05-15T11:05:44Z",
+      "business_id": 42,
+      "data": {
+        "id": "ord_01HX7K4J4M9V2P0Q5T8Z3W6Y1B",
+        "short_id": "K7X9M2",
+        "external_id": "GF-20260515-12345",
+        "business_id": 42,
+        "brand_id": 10,
+        "branch_id": 100,
+        "provider": { "id": 6, "name": "grabfood", "display_name": "GrabFood" },
+        "channel": "marketplace",
+        "status": "delivered",
+        "status_code": 5,
+        "status_history": [
+          { "status": "placed", "at": "2026-05-15T10:14:20Z", "by": "system" },
+          { "status": "accepted", "at": "2026-05-15T10:15:40Z", "by": "partner" },
+          { "status": "ready", "at": "2026-05-15T10:28:00Z", "by": "partner" },
+          { "status": "delivered", "at": "2026-05-15T10:52:00Z", "by": "aggregator" }
+        ],
+        "order_type": "delivery",
+        "placed_at": "2026-05-15T10:14:20Z",
+        "scheduled_for": null,
+        "customer": { "name": "Aiko Tanaka", "phone": "+66800000000", "email": null },
+        "items": [
+          {
+            "klikit_item_id": 12345,
+            "partner_item_id": "POS-SKU-998",
+            "name": "Classic Cheeseburger",
+            "quantity": 1,
+            "unit_price": 199.00,
+            "subtotal": 199.00,
+            "modifiers": [],
+            "special_instructions": "Operator corrected quantity 2 -> 1"
+          }
+        ],
+        "totals": {
+          "currency": "THB",
+          "subtotal": 199.00,
+          "delivery_fee": 25.00,
+          "service_fee": 10.00,
+          "vat_amount": 16.38,
+          "merchant_total": 250.38,
+          "customer_total": 250.38,
+          "aggregator_commission": null
+        },
+        "payment": { "method": "card", "status": "paid", "is_prepaid": true },
+        "fulfilment": { "mode": "rider_delivery", "rider": { "status": "completed" }, "delivered_at": "2026-05-15T10:52:00Z" },
+        "created_at": "2026-05-15T10:14:20Z",
+        "updated_at": "2026-05-15T11:05:44Z"
+      }
+    }
+  ]
+}

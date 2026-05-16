@@ -3,19 +3,25 @@ info:
   title: klikit Partner API — Orders
   version: 1.0.0
   description: |
-    Order webhooks (klikit → partner) and the partner-side status callback API.
+    Order webhooks (klikit → partner) and the partner-side order read +
+    status callback API.
 
-    See [Orders](../orders.md) for the prose contract and per-provider considerations.
+    Webhook event types carry a `.vN` version suffix (`order.placed.v1`, …).
+    The JSON-schema for each event lives in
+    [`openapi/events/`](./events/); this file documents the HTTP delivery shape.
+
+    See [02-orders.md](../02-orders.md) for the prose contract and per-provider
+    nuances, and [CONTRACT.md](../CONTRACT.md) for the frozen reference.
   contact:
     name: klikit Partner Integrations
-    email: TBD-partner-contact@klikit.io
+    email: partners@klikit.io
   license:
     name: Proprietary — klikit Partner Integration Terms
-    url: https://TBD-legal-url.example.com/partner-terms
+    url: https://klikit.io/legal/partner-terms
 servers:
-  - url: https://TBD-production-host.example.com
+  - url: https://gateway-enterprise.klikit.io
     description: Production
-  - url: https://TBD-sandbox-host.example.com
+  - url: https://gateway-sandbox.klikit.io
     description: Sandbox
 
 tags:
@@ -35,26 +41,28 @@ paths:
       tags: [Orders]
       summary: List orders (paginated)
       description: |
-        Returns orders for the authenticated partner's business. Use cursor pagination —
-        cursors are opaque and not stable across deploys. The `(placed_to - placed_from)`
-        window is capped at **90 days**; wider ranges return `400 invalid_range`.
+        Returns orders for the authenticated credential's `business_id`. Cursor
+        pagination — cursors are opaque and not stable across deploys.
+
+        The `from`/`to` window may not exceed 90 days; a wider range returns
+        `400 invalid_range`. Requires the `orders:read` scope.
       operationId: listOrders
       parameters:
-        - { name: status,        in: query, schema: { $ref: '#/components/schemas/OrderStatusAlias' } }
-        - { name: provider_id,   in: query, schema: { type: integer } }
-        - { name: brand_id,      in: query, schema: { type: integer } }
-        - { name: branch_id,     in: query, schema: { type: integer } }
-        - { name: placed_from,   in: query, schema: { type: string, format: date-time }, description: "ISO-8601 lower bound (inclusive). (placed_to - placed_from) ≤ 90 days." }
-        - { name: placed_to,     in: query, schema: { type: string, format: date-time }, description: "ISO-8601 upper bound (exclusive). (placed_to - placed_from) ≤ 90 days." }
-        - { name: cursor,        in: query, schema: { type: string }, description: Opaque cursor from prior X-Klikit-Next-Cursor }
-        - { name: limit,         in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: status,      in: query, schema: { $ref: '#/components/schemas/OrderStatusAlias' }, description: "Filter by status. Repeat the param for multiple values." }
+        - { name: provider_id, in: query, schema: { type: integer }, description: "Filter by aggregator provider id." }
+        - { name: brand_id,    in: query, schema: { type: integer } }
+        - { name: branch_id,   in: query, schema: { type: integer } }
+        - { name: from,        in: query, schema: { type: string, format: date-time }, description: "Lower bound on placed_at (inclusive)." }
+        - { name: to,          in: query, schema: { type: string, format: date-time }, description: "Upper bound on placed_at (inclusive). (to - from) must be <= 90 days." }
+        - { name: cursor,      in: query, schema: { type: string }, description: "Opaque cursor from a prior X-Klikit-Next-Cursor header." }
+        - { name: limit,       in: query, schema: { type: integer, default: 25, minimum: 1, maximum: 100 }, description: "Page size. Default 25, max 100." }
       responses:
         '200':
           description: Order list
           headers:
             X-Klikit-Next-Cursor:
               schema: { type: string }
-              description: Pass to `cursor` query param to fetch next page. Absent when no more pages.
+              description: Pass to the `cursor` query param to fetch the next page. Absent when there are no more pages.
           content:
             application/json:
               schema:
@@ -65,14 +73,27 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Order' }
         '400':
-          description: invalid_range — date window > 90 days
+          description: |
+            Invalid input — malformed parameter (`validation_error`) or a
+            `from`/`to` window wider than 90 days (`invalid_range`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                invalid_range:
+                  value:
+                    error:
+                      code: invalid_range
+                      message: "Date range exceeds the 90-day maximum."
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/InsufficientScope' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/orders/{order_id}:
     get:
       tags: [Orders]
       summary: Get a single order
+      description: Returns the full order payload. Requires the `orders:read` scope.
       operationId: getOrder
       parameters:
         - { name: order_id, in: path, required: true, schema: { type: string } }
@@ -89,20 +110,26 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/InsufficientScope' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/orders/{order_id}/status:
     patch:
       tags: [Orders]
       summary: Advance order status (accept, reject, ready, picked_up, cancel)
       description: |
-        Partner-driven status transitions. Valid transitions:
+        Partner-driven status transitions. Requires the `orders:write` scope.
+        Valid transitions:
         - placed → accepted | cancelled
         - accepted → ready | cancelled
         - ready → picked_up (pickup/dine-in only) | cancelled
         - picked_up, delivered, cancelled → terminal (no transitions)
 
-        `delivery` orders are completed by the rider/aggregator, not the partner —
-        do not call with `status: picked_up` for those.
+        `delivery` orders are completed by the rider/aggregator, not the
+        partner — do not call with `status: picked_up` for those.
+
+        An `Idempotency-Key` header is required; replays within 24h return the
+        cached response. Reusing a key with a different body returns
+        `409 idempotency_conflict`.
       operationId: updateOrderStatus
       parameters:
         - { name: order_id, in: path, required: true, schema: { type: string } }
@@ -114,7 +141,7 @@ paths:
             schema: { $ref: '#/components/schemas/StatusUpdateRequest' }
             examples:
               accept:
-                value: { status: accepted, estimated_ready_at: "2026-04-27T10:30:00Z" }
+                value: { status: accepted, estimated_ready_at: "2026-05-15T10:30:00Z" }
               cancel:
                 value: { status: cancelled, reason_code: out_of_items, note: "Beef patty 86'd" }
               ready:
@@ -125,11 +152,34 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StatusUpdateResponse' }
+        '400':
+          description: |
+            Invalid input — malformed body (`validation_error`), a `cancelled`
+            transition with no `reason_code`, or a `reason_code` not in
+            `GET /v1/partner/orders/cancel-reasons` (`invalid_reason_code`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                invalid_reason_code:
+                  value:
+                    error:
+                      code: invalid_reason_code
+                      message: "reason_code 'kitchen_on_fire' is not a recognised cancel reason."
+                missing_reason_code:
+                  value:
+                    error:
+                      code: invalid_reason_code
+                      message: "reason_code is required when status is 'cancelled'."
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/InsufficientScope' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Conflict — invalid transition or provider rejected cancel
+          description: |
+            Conflict — an invalid state transition (`invalid_transition`), an
+            aggregator that refused the cancel (`provider_rejected_cancel`), or
+            an idempotency key reused with a different body
+            (`idempotency_conflict`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -137,23 +187,28 @@ paths:
                 invalid_transition:
                   value:
                     error:
-                      code: invalid_status_transition
-                      message: Cannot move from 'delivered' to 'accepted'
+                      code: invalid_transition
+                      message: "Cannot move from 'delivered' to 'accepted'."
+                      details: { current_status: delivered }
                 provider_rejected:
                   value:
                     error:
                       code: provider_rejected_cancel
-                      message: Aggregator refused cancellation — rider already assigned
-        '422':
-          description: Missing cancel reason
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+                      message: "Aggregator refused cancellation — rider already assigned."
+                idempotency_conflict:
+                  value:
+                    error:
+                      code: idempotency_conflict
+                      message: "Idempotency-Key already used with a different request body."
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/partner/orders/cancel-reasons:
     get:
       tags: [Reference]
       summary: List cancel reason codes
+      description: |
+        Returns the canonical cancel reason enumeration. `reason_code` on a
+        cancel must be one of these. Requires the `orders:read` scope.
       operationId: listCancelReasons
       responses:
         '200':
@@ -167,11 +222,14 @@ paths:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/CancelReason' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
 
   /v1/partner/providers:
     get:
       tags: [Reference]
       summary: List active aggregator providers
+      description: Requires the `orders:read` scope.
       operationId: listProviders
       responses:
         '200':
@@ -185,24 +243,28 @@ paths:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/Provider' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/InsufficientScope' }
 
 webhooks:
-  order.placed:
+  order.placed.v1:
     post:
       tags: [Webhooks]
       operationId: webhookOrderPlaced
       summary: New order received by klikit
       description: |
-        Fires when a new order arrives, regardless of channel (marketplace, webshop, dine-in, scan-to-order).
-        Your endpoint must respond 2xx within 10s. Verify the HMAC signature in the
-        `X-Klikit-Signature` header before trusting the body — see [Authentication §4](../authentication.md#4-outbound-webhook-signing-hmac).
+        Fires once when a new order arrives, regardless of channel
+        (marketplace, webshop, dine-in, scan-to-order). The partner endpoint
+        must respond 2xx within 10s. Verify the HMAC signature in the
+        `X-Klikit-Signature` header before trusting the body — see
+        [01-authentication.md](../01-authentication.md) §4.
       requestBody:
         $ref: '#/components/requestBodies/OrderEventBody'
       responses:
         '200':
           description: Acknowledged. Any 2xx is treated as success.
 
-  order.updated:
+  order.updated.v1:
     post:
       tags: [Webhooks]
       operationId: webhookOrderUpdated
@@ -213,7 +275,7 @@ webhooks:
       responses:
         '200': { description: Acknowledged }
 
-  order.cancelled:
+  order.cancelled.v1:
     post:
       tags: [Webhooks]
       operationId: webhookOrderCancelled
@@ -223,49 +285,55 @@ webhooks:
       responses:
         '200': { description: Acknowledged }
 
-  order.amended:
+  order.amended.v1:
     post:
       tags: [Webhooks]
       operationId: webhookOrderAmended
       summary: Post-hoc correction to a completed order
       description: |
-        Post-hoc correction issued by klikit (e.g. accounting/reconciliation fix).
-        Replacement payload, not a delta — reconcile the entire order against this body.
+        Operator-driven correction. Replacement payload, not a delta —
+        the partner should reconcile the entire order against this body.
       requestBody:
         $ref: '#/components/requestBodies/OrderEventBody'
       responses:
         '200': { description: Acknowledged }
 
-  order.courier_assigned:
+  order.courier_assigned.v1:
     post:
       tags: [Webhooks]
       operationId: webhookOrderCourierAssigned
-      summary: Aggregator assigned a courier to a delivery order
-      description: Read-only for partners. Fires only for delivery orders.
+      summary: A rider/courier has been assigned to a delivery order
+      description: |
+        Fires for `delivery` orders once the aggregator assigns a courier.
+        `data.fulfilment.rider` is populated.
       requestBody:
         $ref: '#/components/requestBodies/OrderEventBody'
       responses:
         '200': { description: Acknowledged }
 
-  order.picked_up:
+  order.picked_up.v1:
     post:
       tags: [Webhooks]
       operationId: webhookOrderPickedUp
-      summary: Courier picked up the order
-      description: Read-only for partners. Fires only for delivery orders.
+      summary: Order collected from the store
+      description: |
+        Fires when the order leaves the store — courier pickup for delivery, or
+        customer/staff handoff for pickup / dine-in / scan-to-order.
       requestBody:
         $ref: '#/components/requestBodies/OrderEventBody'
       responses:
         '200': { description: Acknowledged }
 
-  order.delivered:
+  order.delivered.v1:
     post:
       tags: [Webhooks]
       operationId: webhookOrderDelivered
-      summary: Order delivered to customer
+      summary: Delivery order completed
       description: |
-        Terminal event for the delivery flow. Read-only for partners. ERP integrations
-        typically act only on this event as their invoicing trigger and discard the others client-side.
+        Fires when a `delivery` order is confirmed delivered. ERP partners
+        commonly trigger invoicing on this event. The aggregator commission
+        breakdown is included in `data.totals.aggregator_commission` when the
+        originating platform supplies it; the field is `null` otherwise.
       requestBody:
         $ref: '#/components/requestBodies/OrderEventBody'
       responses:
@@ -282,9 +350,11 @@ components:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      required: false
+      required: true
       schema: { type: string, format: uuid }
-      description: Replay-safe key. klikit caches the response for 24h.
+      description: |
+        Replay-safe key chosen by the partner (UUID v4). klikit caches the
+        response for 24h. Required on every write.
 
   requestBodies:
     OrderEventBody:
@@ -294,17 +364,17 @@ components:
           schema: { $ref: '#/components/schemas/OrderEvent' }
           examples:
             order_placed:
-              summary: order.placed event
+              summary: order.placed.v1 event
               value:
-                event_id: 01HX7K4J4M9V2P0Q5T8Z3W6Y1B
-                event_type: order.placed
+                event_id: 6f1a8e2c-0b3d-4f5a-9c7e-1d2b3a4c5d6e
+                event_type: order.placed.v1
                 event_version: "1.0"
-                created_at: "2026-04-27T10:14:23Z"
+                created_at: "2026-05-15T10:14:23Z"
                 business_id: 42
                 data:
                   id: ord_01HX7K4J4M9V2P0Q5T8Z3W6Y1B
                   short_id: K7X9M2
-                  external_id: GF-20260427-12345
+                  external_id: GF-20260515-12345
                   business_id: 42
                   brand_id: 10
                   branch_id: 100
@@ -313,7 +383,7 @@ components:
                   status: placed
                   status_code: 1
                   order_type: delivery
-                  placed_at: "2026-04-27T10:14:20Z"
+                  placed_at: "2026-05-15T10:14:20Z"
                   customer:
                     name: Aiko Tanaka
                     phone: "+66800000000"
@@ -335,24 +405,52 @@ components:
                     vat_amount: 30.66
                     merchant_total: 463.00
                     customer_total: 463.00
+                    aggregator_commission: null
                   payment: { method: card, status: paid, is_prepaid: true }
+                  fulfilment: { mode: rider_delivery }
+                  created_at: "2026-05-15T10:14:20Z"
+                  updated_at: "2026-05-15T10:14:23Z"
 
   responses:
     Unauthenticated:
-      description: Missing or invalid token
+      description: Missing, expired, or invalid token (`unauthenticated`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: unauthenticated, message: "Missing or invalid access token." }
     InsufficientScope:
-      description: Token lacks required scope
+      description: Token lacks the scope required for this endpoint (`insufficient_scope`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: insufficient_scope, message: "Token does not grant 'orders:write'." }
     NotFound:
-      description: Order not found, or not owned by this partner's business
+      description: Order not found, or not owned by this credential's business (`order_not_found`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: order_not_found, message: "No order with that id for this business." }
+    RateLimited:
+      description: Rate limit exceeded (`rate_limit_exceeded`)
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds to wait before retrying.
+        X-RateLimit-Limit:
+          schema: { type: integer }
+        X-RateLimit-Remaining:
+          schema: { type: integer }
+        X-RateLimit-Reset:
+          schema: { type: integer }
+          description: Unix timestamp when the window resets.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: rate_limit_exceeded, message: "Too many requests." }
 
   schemas:
     OrderStatusAlias:
@@ -466,6 +564,13 @@ components:
         vat_amount:      { type: number, default: 0 }
         merchant_total:  { type: number, description: What the merchant is owed }
         customer_total:  { type: number, description: What the customer paid }
+        aggregator_commission:
+          type: [number, "null"]
+          description: |
+            Aggregator commission deducted from this order, in the order's
+            currency. Populated on `order.delivered.v1` when the originating
+            platform supplies it; `null` when unavailable. See BRD
+            reconciliation §5.
 
     Payment:
       type: object
@@ -516,7 +621,7 @@ components:
           description: "`placed` and `delivered` are not partner-settable."
         reason_code:
           type: [string, "null"]
-          description: "Required when status=cancelled. See /v1/partner/orders/cancel-reasons."
+          description: "Required when status=cancelled. Must be a code from /v1/partner/orders/cancel-reasons."
         estimated_ready_at:
           type: [string, "null"]
           format: date-time
@@ -541,17 +646,30 @@ components:
 
     OrderEvent:
       type: object
+      description: |
+        Outbound webhook envelope. The `event_type` carries the `.vN` version
+        suffix; the JSON-schema for each type is in `openapi/events/`.
       required: [event_id, event_type, event_version, created_at, business_id, data]
       properties:
-        event_id:      { type: string, format: uuid }
-        event_type:    { type: string, enum: [order.placed, order.updated, order.cancelled, order.amended, order.courier_assigned, order.picked_up, order.delivered] }
-        event_version: { type: string, example: "1.0" }
-        created_at:    { type: string, format: date-time }
+        event_id:      { type: string, format: uuid, description: "Stable across retries — dedupe on this." }
+        event_type:
+          type: string
+          enum:
+            - order.placed.v1
+            - order.updated.v1
+            - order.cancelled.v1
+            - order.amended.v1
+            - order.courier_assigned.v1
+            - order.picked_up.v1
+            - order.delivered.v1
+        event_version: { type: string, example: "1.0", description: "Human schema version string. The authoritative version is the .vN in event_type." }
+        created_at:    { type: string, format: date-time, description: "When klikit emitted the event." }
         business_id:   { type: integer }
         data:          { $ref: '#/components/schemas/Order' }
 
     Error:
       type: object
+      description: Canonical error envelope for all non-OAuth partner endpoints.
       required: [error]
       properties:
         error:

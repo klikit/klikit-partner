@@ -67,7 +67,7 @@ The contract uses **string aliases**, not the internal int IDs. The integers are
 | `ready` | `picked_up` (pickup/dine-in only — delivery completion is rider-driven, not partner-driven), `cancelled` |
 | `picked_up`, `delivered`, `cancelled` | None — terminal |
 
-klikit will reject invalid transitions with `409 Conflict` and an `error.code` of `invalid_status_transition`.
+klikit will reject invalid transitions with `409 Conflict` and an `error.code` of `invalid_transition`.
 
 ---
 
@@ -295,9 +295,9 @@ Content-Type: application/json
 | 401 | `unauthenticated` | Token missing/expired |
 | 403 | `insufficient_scope` | Token lacks `orders:write` |
 | 404 | `order_not_found` | Unknown `order_id` *or* order belongs to another business |
-| 409 | `invalid_status_transition` | E.g. `accepted → placed` |
+| 409 | `invalid_transition` | E.g. `accepted → placed` |
 | 409 | `provider_rejected_cancel` | Aggregator refuses cancel (rider already assigned) |
-| 422 | `missing_cancel_reason` | `cancelled` without `reason_code` |
+| 400 | `invalid_reason_code` | `cancelled` without a recognised `reason_code` |
 
 <Warning>
   `409 provider_rejected_cancel` cannot be retried client-side — the aggregator has refused the cancellation (typically because a rider is already en route). Operators must escalate to klikit support to coordinate the cancel directly with the provider.
@@ -334,20 +334,20 @@ klikit maps the canonical `code` to the appropriate provider-specific code autom
 For partners that prefer pull over push (ERP, reconciliation jobs):
 
 ```http
-GET /v1/partner/orders?status=delivered&placed_from=2026-04-27T00:00:00Z&placed_to=2026-04-27T23:59:59Z&limit=100&cursor=<opaque>
+GET /v1/partner/orders?status=delivered&from=2026-04-27T00:00:00Z&to=2026-04-27T23:59:59Z&limit=100&cursor=<opaque>
 ```
 
 | Query param | Notes |
 |---|---|
 | `status` | Filter (one or comma-separated) |
-| `placed_from` / `placed_to` | ISO-8601 time bounds |
+| `from` / `to` | ISO-8601 time bounds |
 | `provider_id` | Filter by provider |
 | `branch_id` / `brand_id` | Scope to a branch/brand |
 | `cursor` | Opaque pagination cursor from previous response |
 | `limit` | Default 25, max 100 |
 
 <Warning>
-  The `(placed_to - placed_from)` window is capped at **90 days**. Wider ranges return `400 invalid_range`. For reconciliation jobs that need historical data beyond 90 days, page through multiple windows.
+  The `(to - from)` window is capped at **90 days**. Wider ranges return `400 invalid_range`. For reconciliation jobs that need historical data beyond 90 days, page through multiple windows.
 </Warning>
 
 Response is a paginated list of order objects. Use the `X-Klikit-Next-Cursor` header for pagination.
